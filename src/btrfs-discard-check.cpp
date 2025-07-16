@@ -3,8 +3,10 @@
 #include <memory>
 #include <stdexcept>
 #include <iostream>
+#include <nlohmann/json.hpp>
 
 using namespace std;
+using json = nlohmann::json;
 
 class pcloser {
 public:
@@ -37,10 +39,16 @@ int main() {
 
     try {
         auto s = qemu_img_map(filename);
-        cout << s << endl;
 
-        // FIXME - parse JSON
-        // FIXME - die if any parts are compressed
+        auto map = json::parse(s);
+
+        if (map.type() != json::value_t::array)
+            throw runtime_error("JSON was not an array");
+
+        for (auto& m : map) {
+            if ((bool)m["compressed"])
+                throw runtime_error("Cannot handle compressed qcow2 files.");
+        }
 
         // FIXME - mmap
         // FIXME - read superblock
