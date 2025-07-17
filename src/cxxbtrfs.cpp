@@ -315,6 +315,14 @@ struct root_item {
 
 static_assert(sizeof(root_item) == 439);
 
+struct dev_extent {
+    uint64_t chunk_tree;
+    uint64_t chunk_objectid;
+    uint64_t chunk_offset;
+    uint64_t length;
+    uuid chunk_tree_uuid;
+} __attribute__ ((__packed__));
+
 enum class raid_type {
     SINGLE,
     RAID0,

@@ -311,11 +311,49 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
     if (!dev_root.has_value())
         throw runtime_error("ROOT_ITEM for dev tree not found");
 
-    walk_tree(q, node_size, *dev_root, chunks, [](const btrfs::key& k, span<const uint8_t> sp) {
-        cout << format("{}\n", k);
+    vector<pair<uint64_t, uint64_t>> extents, holes;
+
+    walk_tree(q, node_size, *dev_root, chunks, [&extents](const btrfs::key& k, span<const uint8_t> sp) {
+        if (k.type != btrfs::key_type::DEV_EXTENT || k.objectid != 1)
+            return true;
+
+        if (sp.size() < sizeof(btrfs::dev_extent))
+            throw runtime_error("DEV_EXTENT truncated"); // FIXME - include byte counts
+
+        auto& de = *(btrfs::dev_extent*)sp.data();
+        auto length = de.length;
+
+        if (!extents.empty() && extents.back().first + extents.back().second == k.offset)
+            extents.back().second += length;
+        else
+            extents.emplace_back(k.offset, length);
 
         return true;
     });
+
+    auto size = q.qm.back().start + q.qm.back().length;
+
+    optional<uint64_t> last_end;
+    for (const auto& e : extents) {
+        if (!last_end.has_value()) {
+            if (e.first != 0)
+                holes.emplace_back(0, e.first);
+        } else if (e.first > *last_end)
+            holes.emplace_back(*last_end, e.first - *last_end);
+
+        last_end = e.first + e.second;
+    }
+
+    if (!last_end.has_value())
+        holes.emplace_back(0, size);
+    else if (*last_end < size)
+        holes.emplace_back(*last_end, size - *last_end);
+
+    for (const auto& e : holes) {
+        cout << format("hole: {:x}, {:x}\n", e.first, e.second);
+    }
+
+    // FIXME - make sure everything in hole is zeroed
 }
 
 static void check_qcow(const char* filename) {
