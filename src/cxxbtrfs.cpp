@@ -47,6 +47,8 @@ constexpr uint64_t BLOCK_GROUP_RAID6 = 1 << 8;
 constexpr uint64_t BLOCK_GROUP_RAID1C3 = 1 << 9;
 constexpr uint64_t BLOCK_GROUP_RAID1C4 = 1 << 10;
 
+constexpr uint64_t FIRST_CHUNK_TREE_OBJECTID = 0x100;
+
 using uuid = array<uint8_t, 16>;
 
 struct dev_item {

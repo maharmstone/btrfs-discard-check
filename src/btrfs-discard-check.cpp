@@ -224,8 +224,9 @@ static void walk_tree(const qcow& q, uint64_t node_size, uint64_t address,
     }
 }
 
-static void load_chunks(const qcow& q, const btrfs::super_block& sb) {
-    map<uint64_t, btrfs::chunk> sys_chunks;
+static map<uint64_t, btrfs::chunk> load_chunks(const qcow& q,
+                                               const btrfs::super_block& sb) {
+    map<uint64_t, btrfs::chunk> sys_chunks, chunks;
 
     auto sys_array = span(sb.sys_chunk_array.data(), sb.sys_chunk_array_size);
 
@@ -255,15 +256,22 @@ static void load_chunks(const qcow& q, const btrfs::super_block& sb) {
         sys_chunks.insert(make_pair((uint64_t)k.offset, c));
     }
 
-    walk_tree(q, sb.nodesize, sb.chunk_root, sys_chunks, [](const btrfs::key& k, span<const uint8_t> sp) {
-        if (k.type != btrfs::key_type::CHUNK_ITEM)
+    walk_tree(q, sb.nodesize, sb.chunk_root, sys_chunks, [&chunks](const btrfs::key& k, span<const uint8_t> sp) {
+        if (k.type != btrfs::key_type::CHUNK_ITEM || k.objectid != btrfs::FIRST_CHUNK_TREE_OBJECTID)
             return;
 
-        cout << format("{:x},{:x},{:x} ({})\n", k.objectid, (uint8_t)k.type, k.offset, sp.size());
-        // FIXME
+        if (sp.size() < offsetof(btrfs::chunk, stripe))
+            throw runtime_error("CHUNK_ITEM truncated"); // FIXME - include offset and byte counts
+
+        auto& c = *(btrfs::chunk*)sp.data();
+
+        if (sp.size() < offsetof(btrfs::chunk, stripe) + (c.num_stripes * sizeof(btrfs::stripe)))
+            throw runtime_error("CHUNK_ITEM truncated"); // FIXME - include offset and byte counts
+
+        chunks.insert(make_pair((uint64_t)k.offset, c));
     });
 
-    // FIXME
+    return chunks;
 }
 
 static void check_qcow(const char* filename) {
@@ -283,7 +291,7 @@ static void check_qcow(const char* filename) {
 
     // FIXME - check superblock csum
 
-    load_chunks(q, sb);
+    auto chunks = load_chunks(q, sb);
 
     // FIXME - read dev extents tree
     // FIXME - compare dev extents tree with qcow map
