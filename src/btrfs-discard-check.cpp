@@ -5,6 +5,7 @@
 #include <iostream>
 #include <format>
 #include <vector>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -29,7 +30,7 @@ public:
     mapping(const char* filename);
     ~mapping();
 
-    span<const uint8_t> get_span() {
+    span<const uint8_t> get_span() const {
         return span((uint8_t*)addr, length);
     }
 
@@ -49,7 +50,7 @@ struct qcow_map {
 class qcow {
 public:
     qcow(const char* filename);
-    void read(uint64_t offset, span<uint8_t> buf);
+    void read(uint64_t offset, span<uint8_t> buf) const;
 
     mapping mmap;
     vector<qcow_map> qm;
@@ -129,7 +130,7 @@ qcow::qcow(const char* filename) : mmap(filename) {
     }
 }
 
-void qcow::read(uint64_t offset, span<uint8_t> buf) {
+void qcow::read(uint64_t offset, span<uint8_t> buf) const {
     auto sp = mmap.get_span();
 
     while (true) {
@@ -156,7 +157,116 @@ void qcow::read(uint64_t offset, span<uint8_t> buf) {
     }
 }
 
-void check_qcow(const char* filename) {
+static const pair<uint64_t, const btrfs::chunk&> find_chunk(const map<uint64_t, btrfs::chunk>& chunks,
+                                                            uint64_t address) {
+    // FIXME - can we use std::map's lower_bound or upper_bound for this?
+
+    for (auto& p : chunks) {
+        if (p.first > address)
+            throw runtime_error("could not find address in chunks"); // FIXME - include address
+
+        auto& c = p.second;
+
+        if (p.first + c.length <= address)
+            continue;
+
+        return p;
+    }
+
+    throw runtime_error("could not find address in chunks"); // FIXME - include address
+}
+
+static void walk_tree(const qcow& q, uint64_t node_size, uint64_t address,
+                      const map<uint64_t, btrfs::chunk>& chunks,
+                      invocable<const btrfs::key&, span<const uint8_t>> auto func) {
+    auto& [chunk_start, c] = find_chunk(chunks, address);
+
+    switch (btrfs::get_chunk_raid_type(c)) {
+        case btrfs::raid_type::RAID0:
+        case btrfs::raid_type::RAID10:
+        case btrfs::raid_type::RAID5:
+        case btrfs::raid_type::RAID6:
+            throw runtime_error("unsupported RAID type"); // FIXME - include name
+
+        default:
+            break;
+    }
+
+    vector<uint8_t> v;
+
+    v.resize(node_size);
+
+    uint64_t phys_address = address - chunk_start + c.stripe[0].offset;
+
+    q.read(phys_address, v);
+
+    auto& h = *(btrfs::header*)v.data();
+
+    // FIXME - check csum
+
+    if (h.bytenr != address)
+        throw runtime_error("tree address header mismatch"); // FIXME - include numbers
+
+    // FIXME - check generation
+    // FIXME - check owner
+    // FIXME - check level
+
+    if (h.level > 0)
+        throw runtime_error("FIXME - internal nodes"); // FIXME
+
+    span items((btrfs::item*)(v.data() + sizeof(btrfs::header)), h.nritems);
+
+    for (const auto& it : items) {
+        auto sp = span((uint8_t*)v.data() + sizeof(btrfs::header) + it.offset,
+                       it.size);
+
+        func(it.key, sp);
+    }
+}
+
+static void load_chunks(const qcow& q, const btrfs::super_block& sb) {
+    map<uint64_t, btrfs::chunk> sys_chunks;
+
+    auto sys_array = span(sb.sys_chunk_array.data(), sb.sys_chunk_array_size);
+
+    while (!sys_array.empty()) {
+        if (sys_array.size() < sizeof(btrfs::key))
+            throw runtime_error("sys array truncated"); // FIXME - include byte counts
+
+        auto& k = *(btrfs::key*)sys_array.data();
+
+        if (k.type != btrfs::key_type::CHUNK_ITEM)
+            throw runtime_error("unexpected key type in sys array"); // FIXME - include number
+
+        sys_array = sys_array.subspan(sizeof(btrfs::key));
+
+        if (sys_array.size() < offsetof(btrfs::chunk, stripe))
+            throw runtime_error("sys array truncated"); // FIXME - include byte counts
+
+        auto& c = *(btrfs::chunk*)sys_array.data();
+
+        if (sys_array.size() < offsetof(btrfs::chunk, stripe) + (c.num_stripes * sizeof(btrfs::stripe)))
+            throw runtime_error("sys array truncated"); // FIXME - include byte counts
+
+        sys_array = sys_array.subspan(offsetof(btrfs::chunk, stripe) + (c.num_stripes * sizeof(btrfs::stripe)));
+
+        // FIXME - can we safely add a variable-length chunk to the map?
+
+        sys_chunks.insert(make_pair((uint64_t)k.offset, c));
+    }
+
+    walk_tree(q, sb.nodesize, sb.chunk_root, sys_chunks, [](const btrfs::key& k, span<const uint8_t> sp) {
+        if (k.type != btrfs::key_type::CHUNK_ITEM)
+            return;
+
+        cout << format("{:x},{:x},{:x} ({})\n", k.objectid, (uint8_t)k.type, k.offset, sp.size());
+        // FIXME
+    });
+
+    // FIXME
+}
+
+static void check_qcow(const char* filename) {
     qcow q(filename);
 
     btrfs::super_block sb;
@@ -168,9 +278,13 @@ void check_qcow(const char* filename) {
     if (sb.magic != btrfs::MAGIC)
         throw runtime_error("volume was not btrfs");
 
+    if (sb.num_devices != 1)
+        throw runtime_error("multi-device filesystems not supported");
+
     // FIXME - check superblock csum
 
-    // FIXME - read chunk tree
+    load_chunks(q, sb);
+
     // FIXME - read dev extents tree
     // FIXME - compare dev extents tree with qcow map
 
