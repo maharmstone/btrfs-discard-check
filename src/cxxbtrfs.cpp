@@ -278,3 +278,103 @@ enum raid_type get_chunk_raid_type(const chunk& c) {
 }
 
 }
+
+template<>
+struct std::formatter<enum btrfs::key_type> {
+    constexpr auto parse(format_parse_context& ctx) {
+        auto it = ctx.begin();
+
+        if (it != ctx.end() && *it != '}')
+            throw format_error("invalid format");
+
+        return it;
+    }
+
+    template<typename format_context>
+    auto format(enum btrfs::key_type t, format_context& ctx) const {
+        switch (t) {
+            case btrfs::key_type::INODE_ITEM:
+                return format_to(ctx.out(), "INODE_ITEM");
+            case btrfs::key_type::INODE_REF:
+                return format_to(ctx.out(), "INODE_REF");
+            case btrfs::key_type::INODE_EXTREF:
+                return format_to(ctx.out(), "INODE_EXTREF");
+            case btrfs::key_type::XATTR_ITEM:
+                return format_to(ctx.out(), "XATTR_ITEM");
+            case btrfs::key_type::VERITY_DESC_ITEM:
+                return format_to(ctx.out(), "VERITY_DESC_ITEM");
+            case btrfs::key_type::VERITY_MERKLE_ITEM:
+                return format_to(ctx.out(), "VERITY_MERKLE_ITEM");
+            case btrfs::key_type::ORPHAN_INODE:
+                return format_to(ctx.out(), "ORPHAN_INODE");
+            case btrfs::key_type::DIR_LOG_INDEX:
+                return format_to(ctx.out(), "DIR_LOG_INDEX");
+            case btrfs::key_type::DIR_ITEM:
+                return format_to(ctx.out(), "DIR_ITEM");
+            case btrfs::key_type::DIR_INDEX:
+                return format_to(ctx.out(), "DIR_INDEX");
+            case btrfs::key_type::EXTENT_DATA:
+                return format_to(ctx.out(), "EXTENT_DATA");
+            case btrfs::key_type::EXTENT_CSUM:
+                return format_to(ctx.out(), "EXTENT_CSUM");
+            case btrfs::key_type::ROOT_ITEM:
+                return format_to(ctx.out(), "ROOT_ITEM");
+            case btrfs::key_type::ROOT_BACKREF:
+                return format_to(ctx.out(), "ROOT_BACKREF");
+            case btrfs::key_type::ROOT_REF:
+                return format_to(ctx.out(), "ROOT_REF");
+            case btrfs::key_type::EXTENT_ITEM:
+                return format_to(ctx.out(), "EXTENT_ITEM");
+            case btrfs::key_type::METADATA_ITEM:
+                return format_to(ctx.out(), "METADATA_ITEM");
+            case btrfs::key_type::EXTENT_OWNER_REF:
+                return format_to(ctx.out(), "EXTENT_OWNER_REF");
+            case btrfs::key_type::TREE_BLOCK_REF:
+                return format_to(ctx.out(), "TREE_BLOCK_REF");
+            case btrfs::key_type::EXTENT_DATA_REF:
+                return format_to(ctx.out(), "EXTENT_DATA_REF");
+            case btrfs::key_type::SHARED_BLOCK_REF:
+                return format_to(ctx.out(), "SHARED_BLOCK_REF");
+            case btrfs::key_type::SHARED_DATA_REF:
+                return format_to(ctx.out(), "SHARED_DATA_REF");
+            case btrfs::key_type::BLOCK_GROUP_ITEM:
+                return format_to(ctx.out(), "BLOCK_GROUP_ITEM");
+            case btrfs::key_type::FREE_SPACE_INFO:
+                return format_to(ctx.out(), "FREE_SPACE_INFO");
+            case btrfs::key_type::FREE_SPACE_EXTENT:
+                return format_to(ctx.out(), "FREE_SPACE_EXTENT");
+            case btrfs::key_type::FREE_SPACE_BITMAP:
+                return format_to(ctx.out(), "FREE_SPACE_BITMAP");
+            case btrfs::key_type::DEV_EXTENT:
+                return format_to(ctx.out(), "DEV_EXTENT");
+            case btrfs::key_type::DEV_ITEM:
+                return format_to(ctx.out(), "DEV_ITEM");
+            case btrfs::key_type::CHUNK_ITEM:
+                return format_to(ctx.out(), "CHUNK_ITEM");
+            case btrfs::key_type::RAID_STRIPE:
+                return format_to(ctx.out(), "RAID_STRIPE");
+            case btrfs::key_type::QGROUP_STATUS:
+                return format_to(ctx.out(), "QGROUP_STATUS");
+            case btrfs::key_type::QGROUP_INFO:
+                return format_to(ctx.out(), "QGROUP_INFO");
+            case btrfs::key_type::QGROUP_LIMIT:
+                return format_to(ctx.out(), "QGROUP_LIMIT");
+            case btrfs::key_type::QGROUP_RELATION:
+                return format_to(ctx.out(), "QGROUP_RELATION");
+            case btrfs::key_type::TEMPORARY_ITEM:
+                return format_to(ctx.out(), "TEMPORARY_ITEM");
+            case btrfs::key_type::PERSISTENT_ITEM:
+                return format_to(ctx.out(), "PERSISTENT_ITEM");
+            case btrfs::key_type::DEV_REPLACE:
+                return format_to(ctx.out(), "DEV_REPLACE");
+            case btrfs::key_type::UUID_SUBVOL:
+                return format_to(ctx.out(), "UUID_SUBVOL");
+            case btrfs::key_type::UUID_RECEIVED_SUBVOL:
+                return format_to(ctx.out(), "UUID_RECEIVED_SUBVOL");
+            case btrfs::key_type::STRING_ITEM:
+                return format_to(ctx.out(), "STRING_ITEM");
+            default:
+                return format_to(ctx.out(), "{:x}", (uint8_t)t);
+        }
+    }
+};
