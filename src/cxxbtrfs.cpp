@@ -2,6 +2,7 @@ module;
 
 #include <stdint.h>
 #include <array>
+#include <format>
 
 export module cxxbtrfs;
 
@@ -376,5 +377,22 @@ struct std::formatter<enum btrfs::key_type> {
             default:
                 return format_to(ctx.out(), "{:x}", (uint8_t)t);
         }
+    }
+};
+
+template<>
+struct std::formatter<btrfs::key> {
+    constexpr auto parse(format_parse_context& ctx) {
+        auto it = ctx.begin();
+
+        if (it != ctx.end() && *it != '}')
+            throw format_error("invalid format");
+
+        return it;
+    }
+
+    template<typename format_context>
+    auto format(const btrfs::key& k, format_context& ctx) const {
+        return format_to(ctx.out(), "({:x},{},{:x})", k.objectid, k.type, k.offset);
     }
 };
