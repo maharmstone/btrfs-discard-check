@@ -311,7 +311,7 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
     if (!dev_root.has_value())
         throw runtime_error("ROOT_ITEM for dev tree not found");
 
-    vector<pair<uint64_t, uint64_t>> extents, holes;
+    vector<pair<uint64_t, uint64_t>> extents, holes, qcow_extents;
 
     walk_tree(q, node_size, *dev_root, chunks, [&extents](const btrfs::key& k, span<const uint8_t> sp) {
         if (k.type != btrfs::key_type::DEV_EXTENT || k.objectid != 1)
@@ -353,7 +353,21 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
         cout << format("hole: {:x}, {:x}\n", e.first, e.second);
     }
 
-    // FIXME - make sure everything in hole is zeroed
+    for (const auto& m : q.qm) {
+        if (m.zero)
+            continue;
+
+        if (!qcow_extents.empty() && qcow_extents.back().first + qcow_extents.back().second == m.start)
+            qcow_extents.back().second += m.length;
+        else
+            qcow_extents.emplace_back(m.start, m.length);
+    }
+
+    for (const auto& e : qcow_extents) {
+        cout << format("qcow extent: {:x}, {:x}\n", e.first, e.second);
+    }
+
+    // FIXME - make sure qcow extent isn't in a hole
 }
 
 static void check_qcow(const char* filename) {
