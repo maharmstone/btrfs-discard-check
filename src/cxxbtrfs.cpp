@@ -9,6 +9,32 @@ using namespace std;
 
 export namespace btrfs {
 
+constexpr uint64_t superblock_addrs[] = { 0x10000, 0x4000000, 0x4000000000, 0x4000000000000 };
+
+constexpr uint64_t MAGIC = 0x4d5f53665248425f;
+
+constexpr uint64_t FEATURE_INCOMPAT_MIXED_BACKREF = 1 << 0;
+constexpr uint64_t FEATURE_INCOMPAT_DEFAULT_SUBVOL = 1 << 1;
+constexpr uint64_t FEATURE_INCOMPAT_MIXED_GROUPS = 1 << 2;
+constexpr uint64_t FEATURE_INCOMPAT_COMPRESS_LZO = 1 << 3;
+constexpr uint64_t FEATURE_INCOMPAT_COMPRESS_ZSTD = 1 << 4;
+constexpr uint64_t FEATURE_INCOMPAT_BIG_METADATA = 1 << 5;
+constexpr uint64_t FEATURE_INCOMPAT_EXTENDED_IREF = 1 << 6;
+constexpr uint64_t FEATURE_INCOMPAT_RAID56 = 1 << 7;
+constexpr uint64_t FEATURE_INCOMPAT_SKINNY_METADATA = 1 << 8;
+constexpr uint64_t FEATURE_INCOMPAT_NO_HOLES = 1 << 9;
+constexpr uint64_t FEATURE_INCOMPAT_METADATA_UUID = 1 << 10;
+constexpr uint64_t FEATURE_INCOMPAT_RAID1C34 = 1 << 11;
+constexpr uint64_t FEATURE_INCOMPAT_ZONED = 1 << 12;
+constexpr uint64_t FEATURE_INCOMPAT_EXTENT_TREE_V2 = 1 << 13;
+constexpr uint64_t FEATURE_INCOMPAT_RAID_STRIPE_TREE = 1 << 14;
+constexpr uint64_t FEATURE_INCOMPAT_SIMPLE_QUOTA = 1 << 16;
+
+constexpr uint64_t FEATURE_COMPAT_RO_FREE_SPACE_TREE = 1 << 0;
+constexpr uint64_t FEATURE_COMPAT_RO_FREE_SPACE_TREE_VALID = 1 << 1;
+constexpr uint64_t FEATURE_COMPAT_RO_VERITY = 1 << 2;
+constexpr uint64_t FEATURE_COMPAT_RO_BLOCK_GROUP_TREE = 1 << 3;
+
 using uuid = array<uint8_t, 16>;
 
 struct dev_item {

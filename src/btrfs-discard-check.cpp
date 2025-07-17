@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <format>
+#include <vector>
 #include <nlohmann/json.hpp>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -34,6 +35,24 @@ public:
 
     void* addr;
     size_t length;
+};
+
+struct qcow_map {
+    bool data;
+    bool present;
+    bool zero;
+    uint64_t start;
+    uint64_t length;
+    uint64_t offset;
+};
+
+class qcow {
+public:
+    qcow(const char* filename);
+    void read(uint64_t offset, span<uint8_t> buf);
+
+    mapping mmap;
+    vector<qcow_map> qm;
 };
 
 mapping::mapping(const char* filename) {
@@ -87,7 +106,7 @@ static json get_map(const char* filename) {
     if (map.type() != json::value_t::array)
         throw runtime_error("JSON was not an array");
 
-    for (auto& m : map) {
+    for (const auto& m : map) {
         if ((bool)m["compressed"])
             throw runtime_error("Cannot handle compressed qcow2 files.");
     }
@@ -95,26 +114,76 @@ static json get_map(const char* filename) {
     return map;
 }
 
+qcow::qcow(const char* filename) : mmap(filename) {
+    auto map = get_map(filename);
+
+    for (const auto& m : map) {
+        auto data = (bool)m.at("data");
+        auto present = (bool)m.at("present");
+        auto zero = (bool)m.at("zero");
+        auto start = (uint64_t)m.at("start");
+        auto length = (uint64_t)m.at("length");
+        auto offset = present ? (uint64_t)m.at("offset") : 0;
+
+        qm.emplace_back(data, present, zero, start, length, offset);
+    }
+}
+
+void qcow::read(uint64_t offset, span<uint8_t> buf) {
+    auto sp = mmap.get_span();
+
+    while (true) {
+        for (const auto& m : qm) {
+            if (m.start <= offset && m.start + m.length > offset) {
+                auto to_copy = min(buf.size(), m.start + m.length - offset);
+
+                if (m.zero)
+                    memset(buf.data(), 0, to_copy);
+                else {
+                    memcpy(buf.data(), sp.data() + m.offset + offset - m.start,
+                           to_copy);
+                }
+
+                if (buf.size() == to_copy)
+                    return;
+
+                buf = buf.subspan(to_copy);
+
+                break;
+            } else if (m.start >= offset + buf.size())
+                throw runtime_error("mappings not contiguous");
+        }
+    }
+}
+
+void check_qcow(const char* filename) {
+    qcow q(filename);
+
+    btrfs::super_block sb;
+
+    // FIXME - if first superblock not valid, check others
+
+    q.read(btrfs::superblock_addrs[0], span((uint8_t*)&sb, sizeof(sb)));
+
+    if (sb.magic != btrfs::MAGIC)
+        throw runtime_error("volume was not btrfs");
+
+    // FIXME - check superblock csum
+
+    // FIXME - read chunk tree
+    // FIXME - read dev extents tree
+    // FIXME - compare dev extents tree with qcow map
+
+    // FIXME - die if FST flag not set
+    // FIXME - read free space tree
+    // FIXME - compare FST with qcow map
+}
+
 int main() {
     static const char filename[] = "../test.img"; // FIXME - get from args
 
     try {
-        auto map = get_map(filename);
-
-        mapping m(filename);
-
-        auto sp = m.get_span();
-
-        cout << format("sp = {:x}, {:x}\n", (uintptr_t)sp.data(), sp.size());
-
-        // FIXME - read superblock
-        // FIXME - die if FST flag not set
-        // FIXME - read chunk tree
-        // FIXME - read dev extents tree
-        // FIXME - compare dev extents tree with qcow map
-
-        // FIXME - read free space tree
-        // FIXME - compare FST with qcow map
+        check_qcow(filename);
     } catch (const exception& e) {
         cerr << "Exception: " << e.what() << endl;
     }
