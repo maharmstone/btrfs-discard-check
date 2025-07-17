@@ -289,6 +289,13 @@ struct extent {
     bool alloc;
 };
 
+struct extent2 {
+    uint64_t offset;
+    uint64_t length;
+    bool qcow_alloc;
+    bool btrfs_alloc;
+};
+
 static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
                            uint64_t root_tree_root, uint32_t node_size) {
     optional<uint64_t> dev_root;
@@ -353,10 +360,6 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
     else if (*last_end < size)
         extents.emplace_back(*last_end, size - *last_end, false);
 
-    for (const auto& e : extents) {
-        cout << format("{:x}, {:x}, {}\n", e.offset, e.length, e.alloc ? "true" : "false");
-    }
-
     for (const auto& m : q.qm) {
         if (!qcow_extents.empty() &&
             qcow_extents.back().offset + qcow_extents.back().length == m.start &&
@@ -366,9 +369,33 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
             qcow_extents.emplace_back(m.start, m.length, !m.zero);
     }
 
-    cout << "---" << endl;
-    for (const auto& e : qcow_extents) {
-        cout << format("{:x}, {:x}, {}\n", e.offset, e.length, e.alloc ? "true" : "false");
+    vector<extent2> merged;
+
+    size_t i = 0, j = 0;
+    while (i < extents.size() && j < qcow_extents.size()) {
+        auto& be = extents[i];
+        auto& qe = qcow_extents[j];
+
+        if (be.length == qe.length) {
+            merged.emplace_back(be.offset, be.length, qe.alloc, be.alloc);
+            i++;
+            j++;
+        } else if (be.length < qe.length) {
+            merged.emplace_back(be.offset, be.length, qe.alloc, be.alloc);
+            qe.offset += be.length;
+            qe.length -= be.length;
+            i++;
+        } else {
+            merged.emplace_back(be.offset, qe.length, qe.alloc, be.alloc);
+            be.offset += qe.length;
+            be.length -= qe.length;
+            j++;
+        }
+    }
+
+    for (const auto& m : merged) {
+        cout << format("{:x}, {:x}, {}, {}\n", m.offset, m.length, m.qcow_alloc,
+                       m.btrfs_alloc);
     }
 
     // FIXME - make sure qcow extent isn't in a hole
