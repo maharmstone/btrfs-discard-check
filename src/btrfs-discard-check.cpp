@@ -9,6 +9,8 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 
+import cxxbtrfs;
+
 using namespace std;
 using json = nlohmann::json;
 
