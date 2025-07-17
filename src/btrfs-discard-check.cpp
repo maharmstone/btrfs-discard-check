@@ -176,9 +176,15 @@ static const pair<uint64_t, const btrfs::chunk&> find_chunk(const map<uint64_t, 
     throw runtime_error("could not find address in chunks"); // FIXME - include address
 }
 
-static void walk_tree(const qcow& q, uint64_t node_size, uint64_t address,
+template<typename T>
+concept walk_func = requires(T t) {
+    is_invocable_v<T, const btrfs::key&, span<const uint8_t>>;
+    { t(*(btrfs::key*)nullptr, span<const uint8_t>()) } -> same_as<bool>;
+};
+
+static void walk_tree(const qcow& q, uint32_t node_size, uint64_t address,
                       const map<uint64_t, btrfs::chunk>& chunks,
-                      invocable<const btrfs::key&, span<const uint8_t>> auto func) {
+                      walk_func auto func) {
     auto& [chunk_start, c] = find_chunk(chunks, address);
 
     switch (btrfs::get_chunk_raid_type(c)) {
@@ -220,7 +226,8 @@ static void walk_tree(const qcow& q, uint64_t node_size, uint64_t address,
         auto sp = span((uint8_t*)v.data() + sizeof(btrfs::header) + it.offset,
                        it.size);
 
-        func(it.key, sp);
+        if (!func(it.key, sp))
+            break;
     }
 }
 
@@ -258,7 +265,7 @@ static map<uint64_t, btrfs::chunk> load_chunks(const qcow& q,
 
     walk_tree(q, sb.nodesize, sb.chunk_root, sys_chunks, [&chunks](const btrfs::key& k, span<const uint8_t> sp) {
         if (k.type != btrfs::key_type::CHUNK_ITEM || k.objectid != btrfs::FIRST_CHUNK_TREE_OBJECTID)
-            return;
+            return true;
 
         if (sp.size() < offsetof(btrfs::chunk, stripe))
             throw runtime_error("CHUNK_ITEM truncated"); // FIXME - include offset and byte counts
@@ -269,9 +276,46 @@ static map<uint64_t, btrfs::chunk> load_chunks(const qcow& q,
             throw runtime_error("CHUNK_ITEM truncated"); // FIXME - include offset and byte counts
 
         chunks.insert(make_pair((uint64_t)k.offset, c));
+
+        return true;
     });
 
     return chunks;
+}
+
+static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
+                           uint64_t root_tree_root, uint32_t node_size) {
+    optional<uint64_t> dev_root;
+
+    static const btrfs::key search_key = { btrfs::DEV_TREE_OBJECTID, btrfs::key_type::ROOT_ITEM, 0 };
+
+    // FIXME - search tree rather than walking
+
+    walk_tree(q, node_size, root_tree_root, chunks, [&dev_root](const btrfs::key& k, span<const uint8_t> sp) {
+        if (k > search_key)
+            throw runtime_error("ROOT_ITEM for dev tree not found");
+
+        if (k < search_key)
+            return true;
+
+        if (sp.size() < sizeof(btrfs::root_item))
+            throw runtime_error("ROOT_ITEM truncated"); // FIXME - include byte counts
+
+        auto& ri = *(btrfs::root_item*)sp.data();
+
+        dev_root = (uint64_t)ri.bytenr;
+
+        return false;
+    });
+
+    if (!dev_root.has_value())
+        throw runtime_error("ROOT_ITEM for dev tree not found");
+
+    walk_tree(q, node_size, *dev_root, chunks, [](const btrfs::key& k, span<const uint8_t> sp) {
+        cout << format("{}\n", k);
+
+        return true;
+    });
 }
 
 static void check_qcow(const char* filename) {
@@ -292,6 +336,8 @@ static void check_qcow(const char* filename) {
     // FIXME - check superblock csum
 
     auto chunks = load_chunks(q, sb);
+
+    check_dev_tree(q, chunks, sb.root, sb.nodesize);
 
     // FIXME - read dev extents tree
     // FIXME - compare dev extents tree with qcow map

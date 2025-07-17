@@ -50,6 +50,19 @@ constexpr uint64_t BLOCK_GROUP_RAID1C4 = 1 << 10;
 
 constexpr uint64_t FIRST_CHUNK_TREE_OBJECTID = 0x100;
 
+constexpr uint64_t ROOT_TREE_OBJECTID = 0x1;
+constexpr uint64_t EXTENT_TREE_OBJECTID = 0x2;
+constexpr uint64_t CHUNK_TREE_OBJECTID = 0x3;
+constexpr uint64_t DEV_TREE_OBJECTID = 0x4;
+constexpr uint64_t FS_TREE_OBJECTID = 0x5;
+constexpr uint64_t ROOT_TREE_DIR_OBJECTID = 0x6;
+constexpr uint64_t CSUM_TREE_OBJECTID = 0x7;
+constexpr uint64_t UUID_TREE_OBJECTID = 0x9;
+constexpr uint64_t FREE_SPACE_TREE_OBJECTID = 0xa;
+constexpr uint64_t BLOCK_GROUP_TREE_OBJECTID = 0xb;
+constexpr uint64_t EXTENT_CSUM_OBJECTID = 0xfffffffffffffff6;
+constexpr uint64_t DATA_RELOC_TREE_OBJECTID = 0xfffffffffffffff7;
+
 using uuid = array<uint8_t, 16>;
 
 struct dev_item {
@@ -244,6 +257,63 @@ struct item {
 } __attribute__((packed));
 
 static_assert(sizeof(item) == 25);
+
+struct timespec {
+    uint64_t sec;
+    uint32_t nsec;
+} __attribute__((packed));
+
+struct inode_item {
+    uint64_t generation;
+    uint64_t transid;
+    uint64_t size;
+    uint64_t nbytes;
+    uint64_t block_group;
+    uint32_t nlink;
+    uint32_t uid;
+    uint32_t gid;
+    uint32_t mode;
+    uint64_t rdev;
+    uint64_t flags;
+    uint64_t sequence;
+    uint64_t reserved[4];
+    timespec atime;
+    timespec ctime;
+    timespec mtime;
+    timespec otime;
+} __attribute__((packed));
+
+static_assert(sizeof(inode_item) == 160);
+
+struct root_item {
+    inode_item inode;
+    uint64_t generation;
+    uint64_t root_dirid;
+    uint64_t bytenr;
+    uint64_t byte_limit;
+    uint64_t bytes_used;
+    uint64_t last_snapshot;
+    uint64_t flags;
+    uint32_t refs;
+    key drop_progress;
+    uint8_t drop_level;
+    uint8_t level;
+    uint64_t generation_v2;
+    btrfs::uuid uuid;
+    btrfs::uuid parent_uuid;
+    btrfs::uuid received_uuid;
+    uint64_t ctransid;
+    uint64_t otransid;
+    uint64_t stransid;
+    uint64_t rtransid;
+    timespec ctime;
+    timespec otime;
+    timespec stime;
+    timespec rtime;
+    uint64_t reserved[8];
+} __attribute__((packed));
+
+static_assert(sizeof(root_item) == 439);
 
 enum class raid_type {
     SINGLE,
