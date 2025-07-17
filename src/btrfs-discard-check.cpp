@@ -283,6 +283,12 @@ static map<uint64_t, btrfs::chunk> load_chunks(const qcow& q,
     return chunks;
 }
 
+struct extent {
+    uint64_t offset;
+    uint64_t length;
+    bool alloc;
+};
+
 static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
                            uint64_t root_tree_root, uint32_t node_size) {
     optional<uint64_t> dev_root;
@@ -311,9 +317,10 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
     if (!dev_root.has_value())
         throw runtime_error("ROOT_ITEM for dev tree not found");
 
-    vector<pair<uint64_t, uint64_t>> extents, holes, qcow_extents;
+    vector<::extent> extents, qcow_extents;
 
-    walk_tree(q, node_size, *dev_root, chunks, [&extents](const btrfs::key& k, span<const uint8_t> sp) {
+    optional<uint64_t> last_end;
+    walk_tree(q, node_size, *dev_root, chunks, [&extents, &last_end](const btrfs::key& k, span<const uint8_t> sp) {
         if (k.type != btrfs::key_type::DEV_EXTENT || k.objectid != 1)
             return true;
 
@@ -323,48 +330,45 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
         auto& de = *(btrfs::dev_extent*)sp.data();
         auto length = de.length;
 
-        if (!extents.empty() && extents.back().first + extents.back().second == k.offset)
-            extents.back().second += length;
+        if (!last_end.has_value()) {
+            if (k.offset != 0)
+                extents.emplace_back(0, k.offset, false);
+        } else if (k.offset > *last_end)
+            extents.emplace_back(*last_end, k.offset - *last_end, false);
+
+        if (!extents.empty() && extents.back().offset + extents.back().length == k.offset && extents.back().alloc)
+            extents.back().length += length;
         else
-            extents.emplace_back(k.offset, length);
+            extents.emplace_back(k.offset, length, true);
+
+        last_end = k.offset + length;
 
         return true;
     });
 
     auto size = q.qm.back().start + q.qm.back().length;
 
-    optional<uint64_t> last_end;
-    for (const auto& e : extents) {
-        if (!last_end.has_value()) {
-            if (e.first != 0)
-                holes.emplace_back(0, e.first);
-        } else if (e.first > *last_end)
-            holes.emplace_back(*last_end, e.first - *last_end);
-
-        last_end = e.first + e.second;
-    }
-
     if (!last_end.has_value())
-        holes.emplace_back(0, size);
+        extents.emplace_back(0, size, false);
     else if (*last_end < size)
-        holes.emplace_back(*last_end, size - *last_end);
+        extents.emplace_back(*last_end, size - *last_end, false);
 
-    for (const auto& e : holes) {
-        cout << format("hole: {:x}, {:x}\n", e.first, e.second);
+    for (const auto& e : extents) {
+        cout << format("{:x}, {:x}, {}\n", e.offset, e.length, e.alloc ? "true" : "false");
     }
 
     for (const auto& m : q.qm) {
-        if (m.zero)
-            continue;
-
-        if (!qcow_extents.empty() && qcow_extents.back().first + qcow_extents.back().second == m.start)
-            qcow_extents.back().second += m.length;
-        else
-            qcow_extents.emplace_back(m.start, m.length);
+        if (!qcow_extents.empty() &&
+            qcow_extents.back().offset + qcow_extents.back().length == m.start &&
+            !!qcow_extents.back().alloc == !m.zero) {
+            qcow_extents.back().length += m.length;
+        } else
+            qcow_extents.emplace_back(m.start, m.length, !m.zero);
     }
 
+    cout << "---" << endl;
     for (const auto& e : qcow_extents) {
-        cout << format("qcow extent: {:x}, {:x}\n", e.first, e.second);
+        cout << format("{:x}, {:x}, {}\n", e.offset, e.length, e.alloc ? "true" : "false");
     }
 
     // FIXME - make sure qcow extent isn't in a hole
