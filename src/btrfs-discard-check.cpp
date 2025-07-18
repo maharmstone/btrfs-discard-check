@@ -283,7 +283,45 @@ static map<uint64_t, btrfs::chunk> load_chunks(const qcow& q,
     return chunks;
 }
 
-struct extent {
+enum class btrfs_alloc {
+    unallocated,
+    superblock,
+    chunk
+};
+
+template<>
+struct std::formatter<enum btrfs_alloc> {
+    constexpr auto parse(format_parse_context& ctx) {
+        auto it = ctx.begin();
+
+        if (it != ctx.end() && *it != '}')
+            throw format_error("invalid format");
+
+        return it;
+    }
+
+    template<typename format_context>
+    auto format(enum btrfs_alloc t, format_context& ctx) const {
+        switch (t) {
+            case btrfs_alloc::unallocated:
+                return format_to(ctx.out(), "unallocated");
+            case btrfs_alloc::superblock:
+                return format_to(ctx.out(), "superblock");
+            case btrfs_alloc::chunk:
+                return format_to(ctx.out(), "chunk");
+            default:
+                return format_to(ctx.out(), "{}", (unsigned int)t);
+        }
+    }
+};
+
+struct btrfs_extent {
+    uint64_t offset;
+    uint64_t length;
+    enum btrfs_alloc alloc;
+};
+
+struct qcow_extent {
     uint64_t offset;
     uint64_t length;
     bool alloc;
@@ -293,11 +331,11 @@ struct extent2 {
     uint64_t offset;
     uint64_t length;
     bool qcow_alloc;
-    bool btrfs_alloc;
+    enum btrfs_alloc btrfs_alloc;
 };
 
-static void carve_out_superblocks(vector<::extent>& extents, uint64_t size) {
-    vector<::extent> ret;
+static void carve_out_superblocks(vector<btrfs_extent>& extents) {
+    vector<btrfs_extent> ret;
 
     for (const auto& e : extents) {
         bool superblock_added = false;
@@ -309,7 +347,8 @@ static void carve_out_superblocks(vector<::extent>& extents, uint64_t size) {
                 if (addr > e.offset)
                     ret.emplace_back(e.offset, addr - e.offset, e.alloc);
 
-                ret.emplace_back(addr, sizeof(btrfs::super_block), true);
+                ret.emplace_back(addr, sizeof(btrfs::super_block),
+                                 btrfs_alloc::superblock);
 
                 if (e.offset + e.length > addr + sizeof(btrfs::super_block) ) {
                     ret.emplace_back(addr + sizeof(btrfs::super_block),
@@ -357,7 +396,8 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
     if (!dev_root.has_value())
         throw runtime_error("ROOT_ITEM for dev tree not found");
 
-    vector<::extent> extents, qcow_extents;
+    vector<btrfs_extent> extents;
+    vector<qcow_extent> qcow_extents;
 
     optional<uint64_t> last_end;
     walk_tree(q, node_size, *dev_root, chunks, [&extents, &last_end](const btrfs::key& k, span<const uint8_t> sp) {
@@ -372,11 +412,12 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
 
         if (!last_end.has_value()) {
             if (k.offset != 0)
-                extents.emplace_back(0, k.offset, false);
+                extents.emplace_back(0, k.offset, btrfs_alloc::unallocated);
         } else if (k.offset > *last_end)
-            extents.emplace_back(*last_end, k.offset - *last_end, false);
+            extents.emplace_back(*last_end, k.offset - *last_end,
+                                 btrfs_alloc::unallocated);
 
-        extents.emplace_back(k.offset, length, true);
+        extents.emplace_back(k.offset, length, btrfs_alloc::chunk);
 
         last_end = k.offset + length;
 
@@ -386,9 +427,9 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
     auto size = q.qm.back().start + q.qm.back().length;
 
     if (!last_end.has_value())
-        extents.emplace_back(0, size, false);
+        extents.emplace_back(0, size, btrfs_alloc::unallocated);
     else if (*last_end < size)
-        extents.emplace_back(*last_end, size - *last_end, false);
+        extents.emplace_back(*last_end, size - *last_end, btrfs_alloc::unallocated);
 
     for (const auto& m : q.qm) {
         if (!qcow_extents.empty() &&
@@ -399,7 +440,7 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
             qcow_extents.emplace_back(m.start, m.length, !m.zero);
     }
 
-    carve_out_superblocks(extents, size);
+    carve_out_superblocks(extents);
 
     vector<extent2> merged;
 
@@ -433,7 +474,7 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
     // FIXME - assign to chunks etc.
 
     for (const auto& m : merged) {
-        if (m.qcow_alloc && !m.btrfs_alloc)
+        if (m.qcow_alloc && m.btrfs_alloc == btrfs_alloc::unallocated)
             cerr << format("qcow range {:x}, {:x} allocated but not part of any btrfs chunk",
                            m.offset, m.length) << endl;
     }
