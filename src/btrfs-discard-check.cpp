@@ -398,7 +398,13 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
                        m.btrfs_alloc);
     }
 
-    // FIXME - make sure qcow extent isn't in a hole
+    // FIXME - superblocks!
+
+    for (const auto& m : merged) {
+        if (m.qcow_alloc && !m.btrfs_alloc)
+            cerr << format("qcow range {:x}, {:x} allocated but not part of any btrfs chunk",
+                           m.offset, m.length) << endl;
+    }
 }
 
 static void check_qcow(const char* filename) {
