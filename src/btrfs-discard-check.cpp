@@ -124,7 +124,7 @@ qcow::qcow(const char* filename) : mmap(filename) {
         auto zero = (bool)m.at("zero");
         auto start = (uint64_t)m.at("start");
         auto length = (uint64_t)m.at("length");
-        auto offset = present ? (uint64_t)m.at("offset") : 0;
+        auto offset = !zero ? (uint64_t)m.at("offset") : 0;
 
         qm.emplace_back(data, present, zero, start, length, offset);
     }
