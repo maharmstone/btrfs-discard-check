@@ -494,6 +494,52 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
     }
 }
 
+static void read_fst(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
+                     uint64_t root_tree_root, uint32_t node_size) {
+    optional<uint64_t> fst_root;
+
+    static const btrfs::key search_key = { btrfs::FREE_SPACE_TREE_OBJECTID, btrfs::key_type::ROOT_ITEM, 0 };
+
+    // FIXME - search tree rather than walking
+
+    walk_tree(q, node_size, root_tree_root, chunks, [&fst_root](const btrfs::key& k, span<const uint8_t> sp) {
+        if (k > search_key)
+            throw runtime_error("ROOT_ITEM for free space tree not found");
+
+        if (k < search_key)
+            return true;
+
+        if (sp.size() < sizeof(btrfs::root_item))
+            throw runtime_error("ROOT_ITEM truncated"); // FIXME - include byte counts
+
+        auto& ri = *(btrfs::root_item*)sp.data();
+
+        fst_root = (uint64_t)ri.bytenr;
+
+        return false;
+    });
+
+    if (!fst_root.has_value())
+        throw runtime_error("ROOT_ITEM for free space tree not found");
+
+    vector<pair<uint64_t, uint64_t>> free_space;
+
+    walk_tree(q, node_size, *fst_root, chunks, [&free_space](const btrfs::key& k, span<const uint8_t> sp) {
+        // FIXME - bitmaps
+
+        if (k.type == btrfs::key_type::FREE_SPACE_EXTENT)
+            free_space.emplace_back(k.objectid, k.offset);
+
+        return true;
+    });
+
+    for (const auto& f : free_space) {
+        cout << format("free space: {:x}, {:x}\n", f.first, f.second);
+    }
+
+    // FIXME
+}
+
 static void check_qcow(const char* filename) {
     qcow q(filename);
 
@@ -515,8 +561,10 @@ static void check_qcow(const char* filename) {
 
     check_dev_tree(q, chunks, sb.root, sb.nodesize);
 
-    // FIXME - die if FST flag not set
-    // FIXME - read free space tree
+    // FIXME - die if FST flag not set (or just refuse to run FST code)
+
+    read_fst(q, chunks, sb.root, sb.nodesize);
+
     // FIXME - compare FST with qcow map
 }
 
