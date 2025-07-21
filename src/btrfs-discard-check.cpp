@@ -656,6 +656,8 @@ static map<uint64_t, vector<space_entry2>> read_fst(const qcow& q,
 
 static void do_merge2(uint64_t chunk_address, vector<extent2>& dev_extents,
                       vector<space_entry2>& space) {
+    (void)chunk_address;
+
 #if 0
     cout << format("chunk {:x}:", chunk_address) << endl;
 
@@ -706,10 +708,22 @@ static void do_merge2(uint64_t chunk_address, vector<extent2>& dev_extents,
         }
     }
 
+#if 0
     for (const auto& f : merged) {
         cout << format("merged: physical address {:x}, length {:x}, logical address {:x}, qcow_alloc {}, btrfs_alloc {}",
                        f.offset, f.length, f.address, f.qcow_alloc,
                        f.btrfs_alloc) << endl;
+    }
+#endif
+
+    for (const auto& f : merged) {
+        if (f.qcow_alloc && f.btrfs_alloc == btrfs_alloc::chunk_free) {
+            cerr << format("qcow range {:x}, {:x} allocated (address {:x}) but is free space",
+                           f.offset, f.length, f.address) << endl;
+        } else if (!f.qcow_alloc && f.btrfs_alloc == btrfs_alloc::chunk_used) {
+            cerr << format("qcow range {:x}, {:x} discarded (address {:x}) but is allocated",
+                           f.offset, f.length, f.address) << endl;
+        }
     }
 }
 
