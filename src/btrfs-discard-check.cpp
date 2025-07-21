@@ -367,7 +367,8 @@ static void carve_out_superblocks(vector<btrfs_extent>& extents) {
                 }
 
                 ret.emplace_back(addr, sizeof(btrfs::super_block),
-                                 btrfs_alloc::superblock, 0);
+                                 btrfs_alloc::superblock,
+                                 e.alloc == btrfs_alloc::unallocated ? 0 : e.address + addr - e.offset);
 
                 if (e.offset + e.length > addr + sizeof(btrfs::super_block) ) {
                     ret.emplace_back(addr + sizeof(btrfs::super_block),
@@ -499,7 +500,7 @@ static map<uint64_t, vector<extent2>> check_dev_tree(const qcow& q,
     for (auto& m : merged) {
         uint64_t chunk_address;
 
-        if (m.btrfs_alloc == btrfs_alloc::chunk) {
+        if (m.btrfs_alloc == btrfs_alloc::chunk || (m.btrfs_alloc == btrfs_alloc::superblock && m.address != 0)) {
             auto it = chunks.upper_bound(m.address);
 
             chunk_address = prev(it)->first;
@@ -681,10 +682,14 @@ static void do_merge2(uint64_t chunk_address, vector<extent2>& dev_extents,
 
         enum btrfs_alloc alloc;
 
-        if (s.alloc)
+        if (d.btrfs_alloc == btrfs_alloc::superblock)
+            alloc = btrfs_alloc::superblock;
+        else if (s.alloc)
             alloc = btrfs_alloc::chunk_used;
         else
             alloc = btrfs_alloc::chunk_free;
+
+        assert(d.offset == s.phys_address);
 
         if (d.length == s.length) {
             merged.emplace_back(d.offset, d.length, d.qcow_alloc, alloc,
@@ -702,8 +707,8 @@ static void do_merge2(uint64_t chunk_address, vector<extent2>& dev_extents,
             merged.emplace_back(d.offset, s.length, d.qcow_alloc, alloc,
                                 d.address);
             d.offset += s.length;
-            d.length -= s.length;
             d.address += s.length;
+            d.length -= s.length;
             j++;
         }
     }
