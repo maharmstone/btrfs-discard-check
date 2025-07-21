@@ -511,6 +511,12 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
     }
 }
 
+struct space_entry {
+    uint64_t address;
+    uint64_t length;
+    bool alloc;
+};
+
 static void read_fst(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
                      uint64_t root_tree_root, uint32_t node_size) {
     optional<uint64_t> fst_root;
@@ -550,7 +556,7 @@ static void read_fst(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
         return true;
     });
 
-    map<uint64_t, vector<pair<uint64_t, uint64_t>>> fst_by_chunk;
+    map<uint64_t, vector<space_entry>> space;
 
     for (auto& f : free_space) {
         uint64_t chunk_address;
@@ -565,14 +571,43 @@ static void read_fst(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
 
         chunk_address = prev(it)->first;
 
-        fst_by_chunk[chunk_address].push_back(move(f));
+        if (!space.contains(chunk_address)) {
+            if (f.first > chunk_address) {
+                space[chunk_address].emplace_back(chunk_address,
+                            f.first - chunk_address, true);
+            }
+        } else {
+            const auto& l = space[chunk_address].back();
+
+            if (f.first > l.address + l.length) {
+                space[chunk_address].emplace_back(l.address + l.length,
+                            f.first - l.address - l.length, true);
+            }
+        }
+
+        space[chunk_address].emplace_back(f.first, f.second, false);
     }
 
-    for (const auto& bc : fst_by_chunk) {
-        cout << format("chunk {:x}:\n", bc.first);
+    for (auto& bc : space) {
+        cout << format("chunk {:x}:", bc.first) << endl;
+
+        auto& c = chunks.at(bc.first);
+
+        if (bc.second.empty())
+            bc.second.emplace_back(bc.first, c.length, false);
+        else {
+            const auto& l = bc.second.back();
+
+            if (l.address + l.length < bc.first + c.length) {
+                bc.second.emplace_back(l.address + l.length,
+                                       bc.first + c.length - l.address - l.length,
+                                       false);
+            }
+        }
 
         for (const auto& f : bc.second) {
-            cout << format("free space: {:x}, {:x}\n", f.first, f.second);
+            cout << format("space: {:x}, {:x}, {}", f.address,
+                           f.length, f.alloc) << endl;
         }
     }
 
