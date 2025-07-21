@@ -733,6 +733,13 @@ static map<uint64_t, vector<space_entry2>> read_fst(const qcow& q,
         space[chunk_address].emplace_back(f.first, f.second, false);
     }
 
+    // handle fully-allocated chunks
+
+    for (const auto& c : chunks) {
+        if (!space.contains(c.first))
+            space[c.first].emplace_back(c.first, c.second.length);
+    }
+
     for (auto& bc : space) {
         auto& c = chunks.at(bc.first);
 
