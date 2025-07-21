@@ -420,6 +420,17 @@ bool check_superblock_csum(const super_block& sb) {
     return *(uint32_t*)sb.csum.data() == crc32;
 }
 
+bool check_tree_csum(const header& h, const super_block& sb) {
+    // FIXME - xxhash, sha256, blake2
+
+    if (sb.csum_type != csum_type::CRC32)
+        return false;
+
+    auto crc32 = ~calc_crc32c(0xffffffff, span((uint8_t*)&h.fsid, sb.nodesize - sizeof(h.csum)));
+
+    return *(uint32_t*)h.csum.data() == crc32;
+}
+
 }
 
 template<>
