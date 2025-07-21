@@ -166,21 +166,17 @@ void qcow::read(uint64_t offset, span<uint8_t> buf) const {
 
 static const pair<uint64_t, const chunk&> find_chunk(const map<uint64_t, chunk>& chunks,
                                                      uint64_t address) {
-    // FIXME - can we use std::map's lower_bound or upper_bound for this?
+    auto it = chunks.upper_bound(address);
 
-    for (auto& p : chunks) {
-        if (p.first > address)
-            throw formatted_error("could not find address {:x} in chunks", address);
+    if (it == chunks.begin())
+        throw formatted_error("could not find address {:x} in chunks", address);
 
-        auto& c = p.second;
+    const auto& p = *prev(it);
 
-        if (p.first + c.length <= address)
-            continue;
+    if (p.first + p.second.length <= address)
+        throw formatted_error("could not find address {:x} in chunks", address);
 
-        return p;
-    }
-
-    throw formatted_error("could not find address {:x} in chunks", address);
+    return p;
 }
 
 template<typename T>
