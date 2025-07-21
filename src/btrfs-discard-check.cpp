@@ -757,7 +757,8 @@ static void check_qcow(const char* filename) {
     if (sb.num_devices != 1)
         throw runtime_error("multi-device filesystems not supported");
 
-    // FIXME - check superblock csum
+    if (!btrfs::check_superblock_csum(sb))
+        throw runtime_error("superblock csum mismatch");
 
     // FIXME - check tree csums
 
