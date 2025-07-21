@@ -550,8 +550,30 @@ static void read_fst(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
         return true;
     });
 
-    for (const auto& f : free_space) {
-        cout << format("free space: {:x}, {:x}\n", f.first, f.second);
+    map<uint64_t, vector<pair<uint64_t, uint64_t>>> fst_by_chunk;
+
+    for (auto& f : free_space) {
+        uint64_t chunk_address;
+
+        auto it = chunks.upper_bound(f.first);
+
+        if (it == chunks.begin()) {
+            cerr << format("free space entry {:x}, {:x} not part of any chunk",
+                           f.first, f.second) << endl;
+            continue;
+        }
+
+        chunk_address = prev(it)->first;
+
+        fst_by_chunk[chunk_address].push_back(move(f));
+    }
+
+    for (const auto& bc : fst_by_chunk) {
+        cout << format("chunk {:x}:\n", bc.first);
+
+        for (const auto& f : bc.second) {
+            cout << format("free space: {:x}, {:x}\n", f.first, f.second);
+        }
     }
 
     // FIXME
