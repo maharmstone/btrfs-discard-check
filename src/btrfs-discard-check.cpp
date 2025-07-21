@@ -16,6 +16,12 @@ import cxxbtrfs;
 using namespace std;
 using json = nlohmann::json;
 
+#define MAX_STRIPES 2
+
+struct chunk : btrfs::chunk {
+    btrfs::stripe next_stripes[MAX_STRIPES - 1];
+};
+
 class pcloser {
 public:
     using pointer = FILE*;
@@ -157,8 +163,8 @@ void qcow::read(uint64_t offset, span<uint8_t> buf) const {
     }
 }
 
-static const pair<uint64_t, const btrfs::chunk&> find_chunk(const map<uint64_t, btrfs::chunk>& chunks,
-                                                            uint64_t address) {
+static const pair<uint64_t, const chunk&> find_chunk(const map<uint64_t, chunk>& chunks,
+                                                     uint64_t address) {
     // FIXME - can we use std::map's lower_bound or upper_bound for this?
 
     for (auto& p : chunks) {
@@ -183,7 +189,7 @@ concept walk_func = requires(T t) {
 };
 
 static void walk_tree(const qcow& q, uint32_t node_size, uint64_t address,
-                      const map<uint64_t, btrfs::chunk>& chunks,
+                      const map<uint64_t, chunk>& chunks,
                       walk_func auto func) {
     auto& [chunk_start, c] = find_chunk(chunks, address);
 
@@ -231,9 +237,8 @@ static void walk_tree(const qcow& q, uint32_t node_size, uint64_t address,
     }
 }
 
-static map<uint64_t, btrfs::chunk> load_chunks(const qcow& q,
-                                               const btrfs::super_block& sb) {
-    map<uint64_t, btrfs::chunk> sys_chunks, chunks;
+static map<uint64_t, chunk> load_chunks(const qcow& q, const btrfs::super_block& sb) {
+    map<uint64_t, chunk> sys_chunks, chunks;
 
     auto sys_array = span(sb.sys_chunk_array.data(), sb.sys_chunk_array_size);
 
@@ -251,10 +256,13 @@ static map<uint64_t, btrfs::chunk> load_chunks(const qcow& q,
         if (sys_array.size() < offsetof(btrfs::chunk, stripe))
             throw runtime_error("sys array truncated"); // FIXME - include byte counts
 
-        auto& c = *(btrfs::chunk*)sys_array.data();
+        auto& c = *(chunk*)sys_array.data();
 
         if (sys_array.size() < offsetof(btrfs::chunk, stripe) + (c.num_stripes * sizeof(btrfs::stripe)))
             throw runtime_error("sys array truncated"); // FIXME - include byte counts
+
+        if (c.num_stripes > MAX_STRIPES)
+            throw runtime_error("chunk num_stripes is more than is supported"); // FIXME - include numbers
 
         sys_array = sys_array.subspan(offsetof(btrfs::chunk, stripe) + (c.num_stripes * sizeof(btrfs::stripe)));
 
@@ -270,10 +278,13 @@ static map<uint64_t, btrfs::chunk> load_chunks(const qcow& q,
         if (sp.size() < offsetof(btrfs::chunk, stripe))
             throw runtime_error("CHUNK_ITEM truncated"); // FIXME - include offset and byte counts
 
-        auto& c = *(btrfs::chunk*)sp.data();
+        auto& c = *(chunk*)sp.data();
 
         if (sp.size() < offsetof(btrfs::chunk, stripe) + (c.num_stripes * sizeof(btrfs::stripe)))
             throw runtime_error("CHUNK_ITEM truncated"); // FIXME - include offset and byte counts
+
+        if (c.num_stripes > MAX_STRIPES)
+            throw runtime_error("chunk num_stripes is more than is supported"); // FIXME - include numbers
 
         chunks.insert(make_pair((uint64_t)k.offset, c));
 
@@ -370,7 +381,7 @@ static void carve_out_superblocks(vector<btrfs_extent>& extents) {
     extents.swap(ret);
 }
 
-static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
+static void check_dev_tree(const qcow& q, const map<uint64_t, chunk>& chunks,
                            uint64_t root_tree_root, uint32_t node_size) {
     optional<uint64_t> dev_root;
 
@@ -517,7 +528,14 @@ struct space_entry {
     bool alloc;
 };
 
-static void read_fst(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
+struct space_entry2 {
+    uint64_t log_address;
+    uint64_t phys_address;
+    uint64_t length;
+    bool alloc;
+};
+
+static void read_fst(const qcow& q, const map<uint64_t, chunk>& chunks,
                      uint64_t root_tree_root, uint32_t node_size) {
     optional<uint64_t> fst_root;
 
@@ -589,8 +607,6 @@ static void read_fst(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
     }
 
     for (auto& bc : space) {
-        cout << format("chunk {:x}:", bc.first) << endl;
-
         auto& c = chunks.at(bc.first);
 
         if (bc.second.empty())
@@ -604,10 +620,36 @@ static void read_fst(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
                                        false);
             }
         }
+    }
 
-        for (const auto& f : bc.second) {
-            cout << format("space: {:x}, {:x}, {}", f.address,
-                           f.length, f.alloc) << endl;
+    map<uint64_t, vector<space_entry2>> space2;
+
+    for (auto& bc : space) {
+        cout << format("chunk {:x}:", bc.first) << endl;
+
+        auto& c = chunks.at(bc.first);
+
+        vector<const btrfs::stripe*> stripes;
+
+        for (unsigned int i = 0; i < c.num_stripes; i++) {
+            stripes.push_back(&c.stripe[i]);
+        }
+
+        sort(stripes.begin(), stripes.end(), [](const auto& a, const auto& b) {
+            return a->offset < b->offset;
+        });
+
+        for (const auto& s : stripes) {
+            for (const auto& f : bc.second) {
+                uint64_t phys = f.address - bc.first + s->offset;
+
+                space2[bc.first].emplace_back(f.address, phys, f.length, f.alloc);
+            }
+        }
+
+        for (const auto& f : space2.at(bc.first)) {
+            cout << format("space: physical address {:x}, length {:x}, logical address {:x}, alloc {}",
+                           f.phys_address, f.length, f.log_address, f.alloc) << endl;
         }
     }
 
