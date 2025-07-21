@@ -264,6 +264,81 @@ static bool walk_tree(const qcow& q, const btrfs::super_block& sb, uint64_t addr
     }
 }
 
+template<typename T>
+concept find_item_func = is_invocable_v<T, span<const uint8_t>>;
+
+static bool find_item(const qcow& q, const btrfs::super_block& sb, uint64_t address,
+                      uint8_t exp_level, uint64_t exp_generation,
+                      uint64_t exp_owner, const map<uint64_t, chunk>& chunks,
+                      const btrfs::key& search_key, find_item_func auto func) {
+    auto& [chunk_start, c] = find_chunk(chunks, address);
+
+    switch (btrfs::get_chunk_raid_type(c)) {
+        case btrfs::raid_type::RAID0:
+        case btrfs::raid_type::RAID10:
+        case btrfs::raid_type::RAID5:
+        case btrfs::raid_type::RAID6:
+            throw formatted_error("unsupported RAID type {}", btrfs::get_chunk_raid_type(c));
+
+        default:
+            break;
+    }
+
+    vector<uint8_t> v;
+
+    v.resize(sb.nodesize);
+
+    uint64_t phys_address = address - chunk_start + c.stripe[0].offset;
+
+    q.read(phys_address, v);
+
+    auto& h = *(btrfs::header*)v.data();
+
+    if (!btrfs::check_tree_csum(h, sb)) {
+        throw formatted_error("csum error while reading tree block at {:x}",
+                              address);
+    }
+
+    if (h.bytenr != address) {
+        throw formatted_error("tree address header mismatch ({:x}, expected {:x})",
+                              (uint64_t)h.bytenr, address);
+    }
+
+    if (h.level != exp_level) {
+        throw formatted_error("tree block at {:x} had level {}, expected {}",
+                              address, h.level, exp_level);
+    }
+
+    if (h.generation != exp_generation) {
+        throw formatted_error("tree block at {:x} had generation {:x}, expected {:x}",
+                              address, (uint64_t)h.generation, exp_generation);
+    }
+
+    if (h.owner != exp_owner) {
+        throw formatted_error("tree block at {:x} had owner {:x}, expected {:x}",
+                              address, (uint64_t)h.owner, exp_owner);
+    }
+
+    if (h.level > 0) {
+        // FIXME
+        throw runtime_error("FIXME - internal nodes");
+    } else {
+        span items((btrfs::item*)(v.data() + sizeof(btrfs::header)), h.nritems);
+
+        for (const auto& it : items) {
+            if (it.key == search_key) {
+                func(span((uint8_t*)v.data() + sizeof(btrfs::header) + it.offset,
+                          it.size));
+
+                return true;
+            } else if (it.key > search_key)
+                return false;
+        }
+
+        return false;
+    }
+}
+
 static map<uint64_t, chunk> load_chunks(const qcow& q, const btrfs::super_block& sb) {
     map<uint64_t, chunk> sys_chunks, chunks;
 
@@ -425,22 +500,13 @@ static void carve_out_superblocks(vector<btrfs_extent>& extents) {
 static map<uint64_t, vector<extent2>> check_dev_tree(const qcow& q,
                                                      const map<uint64_t, chunk>& chunks,
                                                      const btrfs::super_block& sb) {
-    optional<uint64_t> dev_root;
+    uint64_t dev_root, dev_generation;
     uint8_t dev_level;
-    uint64_t dev_generation;
 
     static const btrfs::key search_key = { btrfs::DEV_TREE_OBJECTID, btrfs::key_type::ROOT_ITEM, 0 };
 
-    // FIXME - search tree rather than walking
-
-    walk_tree(q, sb, sb.root, sb.root_level, sb.generation, btrfs::ROOT_TREE_OBJECTID,
-              chunks, [&dev_root, &dev_level, &dev_generation](const btrfs::key& k, span<const uint8_t> sp) {
-        if (k > search_key)
-            throw runtime_error("ROOT_ITEM for dev tree not found");
-
-        if (k < search_key)
-            return true;
-
+    if (!find_item(q, sb, sb.root, sb.root_level, sb.generation, btrfs::ROOT_TREE_OBJECTID,
+                   chunks, search_key, [&dev_root, &dev_level, &dev_generation](span<const uint8_t> sp) {
         if (sp.size() < sizeof(btrfs::root_item)) {
             throw formatted_error("ROOT_ITEM truncated ({} bytes, expected {})",
                                   sp.size(), sizeof(btrfs::root_item));
@@ -451,18 +517,14 @@ static map<uint64_t, vector<extent2>> check_dev_tree(const qcow& q,
         dev_root = (uint64_t)ri.bytenr;
         dev_level = ri.level;
         dev_generation = ri.generation;
-
-        return false;
-    });
-
-    if (!dev_root.has_value())
+    }))
         throw runtime_error("ROOT_ITEM for dev tree not found");
 
     vector<btrfs_extent> extents;
     vector<qcow_extent> qcow_extents;
 
     optional<uint64_t> last_end;
-    walk_tree(q, sb, *dev_root, dev_level, dev_generation, btrfs::DEV_TREE_OBJECTID,
+    walk_tree(q, sb, dev_root, dev_level, dev_generation, btrfs::DEV_TREE_OBJECTID,
               chunks, [&extents, &last_end](const btrfs::key& k, span<const uint8_t> sp) {
         if (k.type != btrfs::key_type::DEV_EXTENT || k.objectid != 1)
             return true;
@@ -585,22 +647,15 @@ struct space_entry2 {
 static map<uint64_t, vector<space_entry2>> read_fst(const qcow& q,
                                                     const map<uint64_t, chunk>& chunks,
                                                     const btrfs::super_block& sb) {
-    optional<uint64_t> fst_root;
+    uint64_t fst_root, fst_generation;
     uint8_t fst_level;
-    uint64_t fst_generation;
 
     static const btrfs::key search_key = { btrfs::FREE_SPACE_TREE_OBJECTID, btrfs::key_type::ROOT_ITEM, 0 };
 
     // FIXME - search tree rather than walking
 
-    walk_tree(q, sb, sb.root, sb.root_level, sb.generation, btrfs::ROOT_TREE_OBJECTID,
-              chunks, [&fst_root, &fst_level, &fst_generation](const btrfs::key& k, span<const uint8_t> sp) {
-        if (k > search_key)
-            throw runtime_error("ROOT_ITEM for free space tree not found");
-
-        if (k < search_key)
-            return true;
-
+    if (!find_item(q, sb, sb.root, sb.root_level, sb.generation, btrfs::ROOT_TREE_OBJECTID,
+                   chunks, search_key, [&fst_root, &fst_level, &fst_generation](span<const uint8_t> sp) {
         if (sp.size() < sizeof(btrfs::root_item)) {
             throw formatted_error("ROOT_ITEM truncated ({} bytes, expected {})",
                                   sp.size(), sizeof(btrfs::root_item));
@@ -611,16 +666,12 @@ static map<uint64_t, vector<space_entry2>> read_fst(const qcow& q,
         fst_root = (uint64_t)ri.bytenr;
         fst_level = ri.level;
         fst_generation = ri.generation;
-
-        return false;
-    });
-
-    if (!fst_root.has_value())
+    }))
         throw runtime_error("ROOT_ITEM for free space tree not found");
 
     vector<pair<uint64_t, uint64_t>> free_space;
 
-    walk_tree(q, sb, *fst_root, fst_level, fst_generation, btrfs::FREE_SPACE_TREE_OBJECTID,
+    walk_tree(q, sb, fst_root, fst_level, fst_generation, btrfs::FREE_SPACE_TREE_OBJECTID,
               chunks, [&free_space](const btrfs::key& k, span<const uint8_t>) {
         // FIXME - bitmaps
 
