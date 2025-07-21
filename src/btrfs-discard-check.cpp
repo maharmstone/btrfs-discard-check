@@ -344,8 +344,6 @@ static void carve_out_superblocks(vector<btrfs_extent>& extents) {
 
         for (auto addr : btrfs::superblock_addrs) {
             if (addr >= e.offset && addr + sizeof(btrfs::super_block) <= e.offset + e.length) {
-                cout << format("superblock {:x} in extent {:x}, {:x}\n", addr, e.offset, e.length);
-
                 if (addr > e.offset) {
                     ret.emplace_back(e.offset, addr - e.offset, e.alloc,
                                      e.address);
@@ -477,20 +475,39 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
         }
     }
 
-    for (const auto& m : merged) {
-        cout << format("{:x}, {:x}, {}, {}", m.offset, m.length, m.qcow_alloc,
-                       m.btrfs_alloc, m.address);
+    map<uint64_t, vector<extent2>> by_chunk;
 
-        if (m.btrfs_alloc == btrfs_alloc::chunk)
-            cout << format(" ({:x})", m.address);
+    for (auto& m : merged) {
+        uint64_t chunk_address;
 
-        cout << endl;
+        if (m.btrfs_alloc == btrfs_alloc::chunk) {
+            auto it = chunks.upper_bound(m.address);
+
+            chunk_address = prev(it)->first;
+        } else
+            chunk_address = 0;
+
+        by_chunk[chunk_address].push_back(move(m));
     }
 
-    for (const auto& m : merged) {
-        if (m.qcow_alloc && m.btrfs_alloc == btrfs_alloc::unallocated)
-            cerr << format("qcow range {:x}, {:x} allocated but not part of any btrfs chunk",
-                           m.offset, m.length) << endl;
+    for (const auto& bc : by_chunk) {
+        if (bc.first == 0) {
+            for (const auto& m : bc.second) {
+                if (m.btrfs_alloc == btrfs_alloc::superblock && !m.qcow_alloc)
+                    cerr << format("superblock at {:x} not allocated", m.offset) << endl;
+                else if (m.btrfs_alloc == btrfs_alloc::unallocated && m.qcow_alloc) {
+                    cerr << format("qcow range {:x}, {:x} allocated but not part of any btrfs chunk",
+                                   m.offset, m.length) << endl;
+                }
+            }
+        } else {
+            cout << format("chunk {:x}:\n", bc.first);
+
+            for (const auto& m : bc.second) {
+                cout << format("physical address {:x}, length {:x}, qcow_alloc {}, logical address {:x}\n",
+                               m.offset, m.length, m.qcow_alloc, m.address);
+            }
+        }
     }
 }
 
@@ -524,7 +541,7 @@ static void read_fst(const qcow& q, const map<uint64_t, btrfs::chunk>& chunks,
 
     vector<pair<uint64_t, uint64_t>> free_space;
 
-    walk_tree(q, node_size, *fst_root, chunks, [&free_space](const btrfs::key& k, span<const uint8_t> sp) {
+    walk_tree(q, node_size, *fst_root, chunks, [&free_space](const btrfs::key& k, span<const uint8_t>) {
         // FIXME - bitmaps
 
         if (k.type == btrfs::key_type::FREE_SPACE_EXTENT)
