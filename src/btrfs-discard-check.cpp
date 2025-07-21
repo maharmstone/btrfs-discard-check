@@ -319,6 +319,7 @@ struct btrfs_extent {
     uint64_t offset;
     uint64_t length;
     enum btrfs_alloc alloc;
+    uint64_t address;
 };
 
 struct qcow_extent {
@@ -332,6 +333,7 @@ struct extent2 {
     uint64_t length;
     bool qcow_alloc;
     enum btrfs_alloc btrfs_alloc;
+    uint64_t address;
 };
 
 static void carve_out_superblocks(vector<btrfs_extent>& extents) {
@@ -344,16 +346,18 @@ static void carve_out_superblocks(vector<btrfs_extent>& extents) {
             if (addr >= e.offset && addr + sizeof(btrfs::super_block) <= e.offset + e.length) {
                 cout << format("superblock {:x} in extent {:x}, {:x}\n", addr, e.offset, e.length);
 
-                if (addr > e.offset)
-                    ret.emplace_back(e.offset, addr - e.offset, e.alloc);
+                if (addr > e.offset) {
+                    ret.emplace_back(e.offset, addr - e.offset, e.alloc,
+                                     e.address);
+                }
 
                 ret.emplace_back(addr, sizeof(btrfs::super_block),
-                                 btrfs_alloc::superblock);
+                                 btrfs_alloc::superblock, 0);
 
                 if (e.offset + e.length > addr + sizeof(btrfs::super_block) ) {
                     ret.emplace_back(addr + sizeof(btrfs::super_block),
-                                    e.offset + e.length - addr - sizeof(btrfs::super_block),
-                                    e.alloc);
+                                     e.offset + e.length - addr - sizeof(btrfs::super_block),
+                                     e.alloc, e.address + addr + sizeof(btrfs::super_block) - e.offset);
                 }
 
                 superblock_added = true;
@@ -412,12 +416,13 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
 
         if (!last_end.has_value()) {
             if (k.offset != 0)
-                extents.emplace_back(0, k.offset, btrfs_alloc::unallocated);
+                extents.emplace_back(0, k.offset, btrfs_alloc::unallocated, 0);
         } else if (k.offset > *last_end)
             extents.emplace_back(*last_end, k.offset - *last_end,
-                                 btrfs_alloc::unallocated);
+                                 btrfs_alloc::unallocated,  0);
 
-        extents.emplace_back(k.offset, length, btrfs_alloc::chunk);
+        extents.emplace_back(k.offset, length, btrfs_alloc::chunk,
+                             (uint64_t)de.chunk_offset);
 
         last_end = k.offset + length;
 
@@ -427,9 +432,11 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
     auto size = q.qm.back().start + q.qm.back().length;
 
     if (!last_end.has_value())
-        extents.emplace_back(0, size, btrfs_alloc::unallocated);
-    else if (*last_end < size)
-        extents.emplace_back(*last_end, size - *last_end, btrfs_alloc::unallocated);
+        extents.emplace_back(0, size, btrfs_alloc::unallocated, 0);
+    else if (*last_end < size) {
+        extents.emplace_back(*last_end, size - *last_end,
+                             btrfs_alloc::unallocated, 0);
+    }
 
     for (const auto& m : q.qm) {
         if (!qcow_extents.empty() &&
@@ -450,28 +457,35 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, btrfs::chunk>& chu
         auto& qe = qcow_extents[j];
 
         if (be.length == qe.length) {
-            merged.emplace_back(be.offset, be.length, qe.alloc, be.alloc);
+            merged.emplace_back(be.offset, be.length, qe.alloc, be.alloc,
+                                be.address);
             i++;
             j++;
         } else if (be.length < qe.length) {
-            merged.emplace_back(be.offset, be.length, qe.alloc, be.alloc);
+            merged.emplace_back(be.offset, be.length, qe.alloc, be.alloc,
+                                be.address);
             qe.offset += be.length;
             qe.length -= be.length;
             i++;
         } else {
-            merged.emplace_back(be.offset, qe.length, qe.alloc, be.alloc);
+            merged.emplace_back(be.offset, qe.length, qe.alloc, be.alloc,
+                                be.address);
             be.offset += qe.length;
             be.length -= qe.length;
+            be.address += qe.length;
             j++;
         }
     }
 
     for (const auto& m : merged) {
-        cout << format("{:x}, {:x}, {}, {}\n", m.offset, m.length, m.qcow_alloc,
-                       m.btrfs_alloc);
-    }
+        cout << format("{:x}, {:x}, {}, {}", m.offset, m.length, m.qcow_alloc,
+                       m.btrfs_alloc, m.address);
 
-    // FIXME - assign to chunks etc.
+        if (m.btrfs_alloc == btrfs_alloc::chunk)
+            cout << format(" ({:x})", m.address);
+
+        cout << endl;
+    }
 
     for (const auto& m : merged) {
         if (m.qcow_alloc && m.btrfs_alloc == btrfs_alloc::unallocated)
@@ -500,9 +514,6 @@ static void check_qcow(const char* filename) {
     auto chunks = load_chunks(q, sb);
 
     check_dev_tree(q, chunks, sb.root, sb.nodesize);
-
-    // FIXME - read dev extents tree
-    // FIXME - compare dev extents tree with qcow map
 
     // FIXME - die if FST flag not set
     // FIXME - read free space tree
