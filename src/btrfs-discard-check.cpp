@@ -320,8 +320,28 @@ static bool find_item(const qcow& q, const btrfs::super_block& sb, uint64_t addr
     }
 
     if (h.level > 0) {
-        // FIXME
-        throw runtime_error("FIXME - internal nodes");
+        span items((btrfs::key_ptr*)(v.data() + sizeof(btrfs::header)),
+                   h.nritems);
+
+        for (size_t i = 0; i < items.size(); i++) {
+            if (items[i].key == search_key)
+                return find_item(q, sb, items[i].blockptr, exp_level - 1,
+                                 items[i].generation, exp_owner, chunks,
+                                 search_key, func);
+
+            if (items[i].key > search_key) {
+                if (i == 0)
+                    return false;
+
+                return find_item(q, sb, items[i - 1].blockptr, exp_level - 1,
+                                 items[i - 1].generation, exp_owner, chunks,
+                                 search_key, func);
+            }
+        }
+
+        return find_item(q, sb, items[items.size() - 1].blockptr, exp_level - 1,
+                         items[items.size() - 1].generation, exp_owner, chunks,
+                         search_key, func);
     } else {
         span items((btrfs::item*)(v.data() + sizeof(btrfs::header)), h.nritems);
 
