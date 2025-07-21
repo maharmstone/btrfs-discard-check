@@ -297,7 +297,9 @@ static map<uint64_t, chunk> load_chunks(const qcow& q, const btrfs::super_block&
 enum class btrfs_alloc {
     unallocated,
     superblock,
-    chunk
+    chunk,
+    chunk_used,
+    chunk_free
 };
 
 template<>
@@ -320,6 +322,10 @@ struct std::formatter<enum btrfs_alloc> {
                 return format_to(ctx.out(), "superblock");
             case btrfs_alloc::chunk:
                 return format_to(ctx.out(), "chunk");
+            case btrfs_alloc::chunk_used:
+                return format_to(ctx.out(), "chunk_used");
+            case btrfs_alloc::chunk_free:
+                return format_to(ctx.out(), "chunk_free");
             default:
                 return format_to(ctx.out(), "{}", (unsigned int)t);
         }
@@ -381,8 +387,10 @@ static void carve_out_superblocks(vector<btrfs_extent>& extents) {
     extents.swap(ret);
 }
 
-static void check_dev_tree(const qcow& q, const map<uint64_t, chunk>& chunks,
-                           uint64_t root_tree_root, uint32_t node_size) {
+static map<uint64_t, vector<extent2>> check_dev_tree(const qcow& q,
+                                                     const map<uint64_t, chunk>& chunks,
+                                                     uint64_t root_tree_root,
+                                                     uint32_t node_size) {
     optional<uint64_t> dev_root;
 
     static const btrfs::key search_key = { btrfs::DEV_TREE_OBJECTID, btrfs::key_type::ROOT_ITEM, 0 };
@@ -511,15 +519,10 @@ static void check_dev_tree(const qcow& q, const map<uint64_t, chunk>& chunks,
                                    m.offset, m.length) << endl;
                 }
             }
-        } else {
-            cout << format("chunk {:x}:\n", bc.first);
-
-            for (const auto& m : bc.second) {
-                cout << format("physical address {:x}, length {:x}, qcow_alloc {}, logical address {:x}\n",
-                               m.offset, m.length, m.qcow_alloc, m.address);
-            }
         }
     }
+
+    return by_chunk;
 }
 
 struct space_entry {
@@ -535,8 +538,10 @@ struct space_entry2 {
     bool alloc;
 };
 
-static void read_fst(const qcow& q, const map<uint64_t, chunk>& chunks,
-                     uint64_t root_tree_root, uint32_t node_size) {
+static map<uint64_t, vector<space_entry2>> read_fst(const qcow& q,
+                                                    const map<uint64_t, chunk>& chunks,
+                                                    uint64_t root_tree_root,
+                                                    uint32_t node_size) {
     optional<uint64_t> fst_root;
 
     static const btrfs::key search_key = { btrfs::FREE_SPACE_TREE_OBJECTID, btrfs::key_type::ROOT_ITEM, 0 };
@@ -625,8 +630,6 @@ static void read_fst(const qcow& q, const map<uint64_t, chunk>& chunks,
     map<uint64_t, vector<space_entry2>> space2;
 
     for (auto& bc : space) {
-        cout << format("chunk {:x}:", bc.first) << endl;
-
         auto& c = chunks.at(bc.first);
 
         vector<const btrfs::stripe*> stripes;
@@ -646,14 +649,78 @@ static void read_fst(const qcow& q, const map<uint64_t, chunk>& chunks,
                 space2[bc.first].emplace_back(f.address, phys, f.length, f.alloc);
             }
         }
+    }
 
-        for (const auto& f : space2.at(bc.first)) {
-            cout << format("space: physical address {:x}, length {:x}, logical address {:x}, alloc {}",
-                           f.phys_address, f.length, f.log_address, f.alloc) << endl;
+    return space2;
+}
+
+static void do_merge2(uint64_t chunk_address, vector<extent2>& dev_extents,
+                      vector<space_entry2>& space) {
+#if 0
+    cout << format("chunk {:x}:", chunk_address) << endl;
+
+    for (const auto& m : dev_extents) {
+        cout << format("physical address {:x}, length {:x}, qcow_alloc {}, logical address {:x}\n",
+                       m.offset, m.length, m.qcow_alloc, m.address);
+    }
+
+    for (const auto& f : space) {
+        cout << format("space: physical address {:x}, length {:x}, logical address {:x}, alloc {}",
+                       f.phys_address, f.length, f.log_address, f.alloc) << endl;
+    }
+#endif
+
+    vector<extent2> merged;
+
+    size_t i = 0, j = 0;
+    while (i < dev_extents.size() && j < space.size()) {
+        auto& d = dev_extents[i];
+        auto& s = space[j];
+
+        enum btrfs_alloc alloc;
+
+        if (s.alloc)
+            alloc = btrfs_alloc::chunk_used;
+        else
+            alloc = btrfs_alloc::chunk_free;
+
+        if (d.length == s.length) {
+            merged.emplace_back(d.offset, d.length, d.qcow_alloc, alloc,
+                                d.address);
+            i++;
+            j++;
+        } else if (d.length < s.length) {
+            merged.emplace_back(d.offset, d.length, d.qcow_alloc, alloc,
+                                d.address);
+            s.phys_address += d.length;
+            s.log_address += d.length;
+            s.length -= d.length;
+            i++;
+        } else {
+            merged.emplace_back(d.offset, s.length, d.qcow_alloc, alloc,
+                                d.address);
+            d.offset += s.length;
+            d.length -= s.length;
+            d.address += s.length;
+            j++;
         }
     }
 
-    // FIXME
+    for (const auto& f : merged) {
+        cout << format("merged: physical address {:x}, length {:x}, logical address {:x}, qcow_alloc {}, btrfs_alloc {}",
+                       f.offset, f.length, f.address, f.qcow_alloc,
+                       f.btrfs_alloc) << endl;
+    }
+}
+
+static void do_merge(map<uint64_t, vector<extent2>>& dev_extents,
+                     map<uint64_t, vector<space_entry2>>& space) {
+    for (auto& d : dev_extents) {
+        if (d.first == 0)
+            continue;
+
+        do_merge2(d.first, d.second, space.at(d.first));
+    }
 }
 
 static void check_qcow(const char* filename) {
@@ -673,15 +740,19 @@ static void check_qcow(const char* filename) {
 
     // FIXME - check superblock csum
 
+    // FIXME - check tree csums
+
+    // FIXME - treat initial bit of volume (2MB?) as allocated
+
     auto chunks = load_chunks(q, sb);
 
-    check_dev_tree(q, chunks, sb.root, sb.nodesize);
+    auto dev_extents = check_dev_tree(q, chunks, sb.root, sb.nodesize);
 
     // FIXME - die if FST flag not set (or just refuse to run FST code)
 
-    read_fst(q, chunks, sb.root, sb.nodesize);
+    auto space = read_fst(q, chunks, sb.root, sb.nodesize);
 
-    // FIXME - compare FST with qcow map
+    do_merge(dev_extents, space);
 }
 
 int main() {
