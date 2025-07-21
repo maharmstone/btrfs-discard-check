@@ -310,6 +310,14 @@ struct item {
 
 static_assert(sizeof(item) == 25);
 
+struct key_ptr {
+    btrfs::key key;
+    uint64_t blockptr;
+    uint64_t generation;
+} __attribute__((packed));
+
+static_assert(sizeof(key_ptr) == 33);
+
 struct timespec {
     uint64_t sec;
     uint32_t nsec;

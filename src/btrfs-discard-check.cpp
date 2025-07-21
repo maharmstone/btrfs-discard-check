@@ -185,7 +185,7 @@ concept walk_func = requires(T t) {
     { t(*(btrfs::key*)nullptr, span<const uint8_t>()) } -> same_as<bool>;
 };
 
-static void walk_tree(const qcow& q, const btrfs::super_block& sb, uint64_t address,
+static bool walk_tree(const qcow& q, const btrfs::super_block& sb, uint64_t address,
                       uint8_t exp_level, uint64_t exp_generation,
                       uint64_t exp_owner, const map<uint64_t, chunk>& chunks,
                       walk_func auto func) {
@@ -237,17 +237,30 @@ static void walk_tree(const qcow& q, const btrfs::super_block& sb, uint64_t addr
                               address, (uint64_t)h.owner, exp_owner);
     }
 
-    if (h.level > 0)
-        throw runtime_error("FIXME - internal nodes"); // FIXME
+    if (h.level > 0) {
+        span items((btrfs::key_ptr*)(v.data() + sizeof(btrfs::header)),
+                   h.nritems);
 
-    span items((btrfs::item*)(v.data() + sizeof(btrfs::header)), h.nritems);
+        for (const auto& it : items) {
+            if (!walk_tree(q, sb, it.blockptr, exp_level - 1, it.generation,
+                           exp_owner, chunks, func)) {
+                return false;
+            }
+        }
 
-    for (const auto& it : items) {
-        auto sp = span((uint8_t*)v.data() + sizeof(btrfs::header) + it.offset,
-                       it.size);
+        return true;
+    } else {
+        span items((btrfs::item*)(v.data() + sizeof(btrfs::header)), h.nritems);
 
-        if (!func(it.key, sp))
-            break;
+        for (const auto& it : items) {
+            auto sp = span((uint8_t*)v.data() + sizeof(btrfs::header) + it.offset,
+                        it.size);
+
+            if (!func(it.key, sp))
+                return false;
+        }
+
+        return true;
     }
 }
 
