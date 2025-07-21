@@ -775,12 +775,20 @@ static void check_qcow(const char* filename) {
     do_merge(dev_extents, space);
 }
 
-int main() {
-    static const char filename[] = "../test.img"; // FIXME - get from args
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        cerr << "Usage: btrfs-dischard-check <qcow-image>" << endl;
+        return 1;
+    }
 
     try {
-        check_qcow(filename);
+        check_qcow(argv[1]);
     } catch (const exception& e) {
         cerr << "Exception: " << e.what() << endl;
+        return 1;
     }
+
+    // FIXME - return 1 if any errors found
+
+    return 0;
 }
