@@ -549,3 +549,41 @@ struct std::formatter<btrfs::key> {
         return format_to(ctx.out(), "({:x},{},{:x})", k.objectid, k.type, k.offset);
     }
 };
+
+template<>
+struct std::formatter<enum btrfs::raid_type> {
+    constexpr auto parse(format_parse_context& ctx) {
+        auto it = ctx.begin();
+
+        if (it != ctx.end() && *it != '}')
+            throw format_error("invalid format");
+
+        return it;
+    }
+
+    template<typename format_context>
+    auto format(enum btrfs::raid_type t, format_context& ctx) const {
+        switch (t) {
+            case btrfs::raid_type::SINGLE:
+                return format_to(ctx.out(), "SINGLE");
+            case btrfs::raid_type::RAID0:
+                return format_to(ctx.out(), "RAID0");
+            case btrfs::raid_type::RAID1:
+                return format_to(ctx.out(), "RAID1");
+            case btrfs::raid_type::DUP:
+                return format_to(ctx.out(), "DUP");
+            case btrfs::raid_type::RAID10:
+                return format_to(ctx.out(), "RAID10");
+            case btrfs::raid_type::RAID5:
+                return format_to(ctx.out(), "RAID5");
+            case btrfs::raid_type::RAID6:
+                return format_to(ctx.out(), "RAID6");
+            case btrfs::raid_type::RAID1C3:
+                return format_to(ctx.out(), "RAID1C3");
+            case btrfs::raid_type::RAID1C4:
+                return format_to(ctx.out(), "RAID1C4");
+            default:
+                return format_to(ctx.out(), "{:x}", (uint8_t)t);
+        }
+    }
+};

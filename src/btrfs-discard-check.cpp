@@ -66,12 +66,12 @@ public:
 mapping::mapping(const char* filename) {
     auto fd = open(filename, O_RDONLY);
     if (fd < 0)
-        throw runtime_error("open failed"); // FIXME - show errno
+        throw formatted_error("open failed (errno {})", errno);
 
     struct stat st;
     if (fstat(fd, &st) == -1) {
         close(fd);
-        throw runtime_error("fstat failed"); // FIXME - errno
+        throw formatted_error("fstat failed (errno {})", errno);
     }
 
     length = st.st_size;
@@ -79,7 +79,7 @@ mapping::mapping(const char* filename) {
     addr = mmap(nullptr, length, PROT_READ, MAP_SHARED, fd, 0);
     if (addr == MAP_FAILED) {
         close(fd);
-        throw runtime_error("mmap failed"); // FIXME - errno
+        throw formatted_error("mmap failed (errno {})", errno);
     }
 
     close(fd);
@@ -97,7 +97,7 @@ static string qemu_img_map(const char* filename) {
     unique_ptr<FILE, pcloser> pipe{popen(cmd.data(), "r")};
 
     if (!pipe)
-        throw runtime_error("popen failed"); // FIXME - show errno
+        throw formatted_error("popen failed (errno {})", errno);
 
     while (fgets(buf, sizeof(buf), pipe.get())) {
         ret += buf;
@@ -170,7 +170,7 @@ static const pair<uint64_t, const chunk&> find_chunk(const map<uint64_t, chunk>&
 
     for (auto& p : chunks) {
         if (p.first > address)
-            throw runtime_error("could not find address in chunks"); // FIXME - include address
+            throw formatted_error("could not find address {:x} in chunks", address);
 
         auto& c = p.second;
 
@@ -180,7 +180,7 @@ static const pair<uint64_t, const chunk&> find_chunk(const map<uint64_t, chunk>&
         return p;
     }
 
-    throw runtime_error("could not find address in chunks"); // FIXME - include address
+    throw formatted_error("could not find address {:x} in chunks", address);
 }
 
 template<typename T>
@@ -200,7 +200,7 @@ static void walk_tree(const qcow& q, const btrfs::super_block& sb, uint64_t addr
         case btrfs::raid_type::RAID10:
         case btrfs::raid_type::RAID5:
         case btrfs::raid_type::RAID6:
-            throw runtime_error("unsupported RAID type"); // FIXME - include name
+            throw formatted_error("unsupported RAID type {}", btrfs::get_chunk_raid_type(c));
 
         default:
             break;
@@ -221,8 +221,10 @@ static void walk_tree(const qcow& q, const btrfs::super_block& sb, uint64_t addr
                               address);
     }
 
-    if (h.bytenr != address)
-        throw runtime_error("tree address header mismatch"); // FIXME - include numbers
+    if (h.bytenr != address) {
+        throw formatted_error("tree address header mismatch ({:x}, expected {:x})",
+                              (uint64_t)h.bytenr, address);
+    }
 
     if (h.level != exp_level) {
         throw formatted_error("tree block at {:x} had level {}, expected {}",
@@ -260,29 +262,29 @@ static map<uint64_t, chunk> load_chunks(const qcow& q, const btrfs::super_block&
 
     while (!sys_array.empty()) {
         if (sys_array.size() < sizeof(btrfs::key))
-            throw runtime_error("sys array truncated"); // FIXME - include byte counts
+            throw runtime_error("sys array truncated");
 
         auto& k = *(btrfs::key*)sys_array.data();
 
         if (k.type != btrfs::key_type::CHUNK_ITEM)
-            throw runtime_error("unexpected key type in sys array"); // FIXME - include number
+            throw formatted_error("unexpected key type {} in sys array", k.type);
 
         sys_array = sys_array.subspan(sizeof(btrfs::key));
 
         if (sys_array.size() < offsetof(btrfs::chunk, stripe))
-            throw runtime_error("sys array truncated"); // FIXME - include byte counts
+            throw runtime_error("sys array truncated");
 
         auto& c = *(chunk*)sys_array.data();
 
         if (sys_array.size() < offsetof(btrfs::chunk, stripe) + (c.num_stripes * sizeof(btrfs::stripe)))
-            throw runtime_error("sys array truncated"); // FIXME - include byte counts
+            throw runtime_error("sys array truncated");
 
-        if (c.num_stripes > MAX_STRIPES)
-            throw runtime_error("chunk num_stripes is more than is supported"); // FIXME - include numbers
+        if (c.num_stripes > MAX_STRIPES) {
+            throw formatted_error("chunk num_stripes is {}, maximum supported is {}",
+                                  (uint16_t)c.num_stripes, MAX_STRIPES);
+        }
 
         sys_array = sys_array.subspan(offsetof(btrfs::chunk, stripe) + (c.num_stripes * sizeof(btrfs::stripe)));
-
-        // FIXME - can we safely add a variable-length chunk to the map?
 
         sys_chunks.insert(make_pair((uint64_t)k.offset, c));
     }
@@ -292,16 +294,22 @@ static map<uint64_t, chunk> load_chunks(const qcow& q, const btrfs::super_block&
         if (k.type != btrfs::key_type::CHUNK_ITEM || k.objectid != btrfs::FIRST_CHUNK_TREE_OBJECTID)
             return true;
 
-        if (sp.size() < offsetof(btrfs::chunk, stripe))
-            throw runtime_error("CHUNK_ITEM truncated"); // FIXME - include offset and byte counts
+        if (sp.size() < offsetof(btrfs::chunk, stripe)) {
+            throw formatted_error("CHUNK_ITEM truncated ({} bytes, expected at least {})",
+                                  sp.size(), offsetof(btrfs::chunk, stripe));
+        }
 
         auto& c = *(chunk*)sp.data();
 
-        if (sp.size() < offsetof(btrfs::chunk, stripe) + (c.num_stripes * sizeof(btrfs::stripe)))
-            throw runtime_error("CHUNK_ITEM truncated"); // FIXME - include offset and byte counts
+        if (sp.size() < offsetof(btrfs::chunk, stripe) + (c.num_stripes * sizeof(btrfs::stripe))) {
+            throw formatted_error("CHUNK_ITEM truncated ({} bytes, expected {})",
+                                  sp.size(), offsetof(btrfs::chunk, stripe) + (c.num_stripes * sizeof(btrfs::stripe)));
+        }
 
-        if (c.num_stripes > MAX_STRIPES)
-            throw runtime_error("chunk num_stripes is more than is supported"); // FIXME - include numbers
+        if (c.num_stripes > MAX_STRIPES) {
+            throw formatted_error("chunk num_stripes is {}, maximum supported is {}",
+                                  (uint16_t)c.num_stripes, MAX_STRIPES);
+        }
 
         chunks.insert(make_pair((uint64_t)k.offset, c));
 
@@ -424,8 +432,10 @@ static map<uint64_t, vector<extent2>> check_dev_tree(const qcow& q,
         if (k < search_key)
             return true;
 
-        if (sp.size() < sizeof(btrfs::root_item))
-            throw runtime_error("ROOT_ITEM truncated"); // FIXME - include byte counts
+        if (sp.size() < sizeof(btrfs::root_item)) {
+            throw formatted_error("ROOT_ITEM truncated ({} bytes, expected {})",
+                                  sp.size(), sizeof(btrfs::root_item));
+        }
 
         auto& ri = *(btrfs::root_item*)sp.data();
 
@@ -448,8 +458,10 @@ static map<uint64_t, vector<extent2>> check_dev_tree(const qcow& q,
         if (k.type != btrfs::key_type::DEV_EXTENT || k.objectid != 1)
             return true;
 
-        if (sp.size() < sizeof(btrfs::dev_extent))
-            throw runtime_error("DEV_EXTENT truncated"); // FIXME - include byte counts
+        if (sp.size() < sizeof(btrfs::dev_extent)) {
+            throw formatted_error("DEV_EXTENT truncated ({} bytes, expected {})",
+                                  sp.size(), sizeof(btrfs::dev_extent));
+        }
 
         auto& de = *(btrfs::dev_extent*)sp.data();
         auto length = de.length;
@@ -580,8 +592,10 @@ static map<uint64_t, vector<space_entry2>> read_fst(const qcow& q,
         if (k < search_key)
             return true;
 
-        if (sp.size() < sizeof(btrfs::root_item))
-            throw runtime_error("ROOT_ITEM truncated"); // FIXME - include byte counts
+        if (sp.size() < sizeof(btrfs::root_item)) {
+            throw formatted_error("ROOT_ITEM truncated ({} bytes, expected {})",
+                                  sp.size(), sizeof(btrfs::root_item));
+        }
 
         auto& ri = *(btrfs::root_item*)sp.data();
 
@@ -786,8 +800,6 @@ static void check_qcow(const char* filename) {
 
     if (!btrfs::check_superblock_csum(sb))
         throw runtime_error("superblock csum mismatch");
-
-    // FIXME - check tree csums
 
     // FIXME - treat initial bit of volume (2MB?) as allocated
 
