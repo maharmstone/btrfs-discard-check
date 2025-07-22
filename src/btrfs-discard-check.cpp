@@ -201,10 +201,7 @@ concept walk_func = requires(T t) {
     { t(*(btrfs::key*)nullptr, span<const uint8_t>()) } -> same_as<bool>;
 };
 
-static bool walk_tree(const qcow& q, const btrfs::super_block& sb, uint64_t address,
-                      uint8_t exp_level, uint64_t exp_generation,
-                      uint64_t exp_owner, const map<uint64_t, chunk>& chunks,
-                      walk_func auto func) {
+static uint64_t get_physical_address(uint64_t address, const map<uint64_t, chunk>& chunks) {
     auto& [chunk_start, c] = find_chunk(chunks, address);
 
     switch (btrfs::get_chunk_raid_type(c)) {
@@ -218,11 +215,18 @@ static bool walk_tree(const qcow& q, const btrfs::super_block& sb, uint64_t addr
             break;
     }
 
+    return address - chunk_start + c.stripe[0].offset;
+}
+
+static bool walk_tree(const qcow& q, const btrfs::super_block& sb, uint64_t address,
+                      uint8_t exp_level, uint64_t exp_generation,
+                      uint64_t exp_owner, const map<uint64_t, chunk>& chunks,
+                      walk_func auto func) {
     vector<uint8_t> v;
 
     v.resize(sb.nodesize);
 
-    uint64_t phys_address = address - chunk_start + c.stripe[0].offset;
+    auto phys_address = get_physical_address(address, chunks);
 
     q.read(phys_address, v);
 
@@ -287,24 +291,11 @@ static bool find_item(const qcow& q, const btrfs::super_block& sb, uint64_t addr
                       uint8_t exp_level, uint64_t exp_generation,
                       uint64_t exp_owner, const map<uint64_t, chunk>& chunks,
                       const btrfs::key& search_key, find_item_func auto func) {
-    auto& [chunk_start, c] = find_chunk(chunks, address);
-
-    switch (btrfs::get_chunk_raid_type(c)) {
-        case btrfs::raid_type::RAID0:
-        case btrfs::raid_type::RAID10:
-        case btrfs::raid_type::RAID5:
-        case btrfs::raid_type::RAID6:
-            throw formatted_error("unsupported RAID type {}", btrfs::get_chunk_raid_type(c));
-
-        default:
-            break;
-    }
-
     vector<uint8_t> v;
 
     v.resize(sb.nodesize);
 
-    uint64_t phys_address = address - chunk_start + c.stripe[0].offset;
+    auto phys_address = get_physical_address(address, chunks);
 
     q.read(phys_address, v);
 
