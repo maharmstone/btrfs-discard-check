@@ -692,11 +692,37 @@ static map<uint64_t, vector<space_entry2>> read_fst(const qcow& q,
     vector<pair<uint64_t, uint64_t>> free_space;
 
     walk_tree(q, sb, fst_root, fst_level, fst_generation, btrfs::FREE_SPACE_TREE_OBJECTID,
-              chunks, [&free_space](const btrfs::key& k, span<const uint8_t>) {
-        // FIXME - bitmaps
-
+              chunks, [&free_space, &sb](const btrfs::key& k, span<const uint8_t> sp) {
         if (k.type == btrfs::key_type::FREE_SPACE_EXTENT)
             free_space.emplace_back(k.objectid, k.offset);
+        else if (k.type == btrfs::key_type::FREE_SPACE_BITMAP) {
+            vector<pair<uint64_t, uint64_t>> bmp;
+
+            unsigned int pos = 0;
+
+            while (!sp.empty()) {
+                auto num = sp[0];
+
+                for (unsigned int i = 0; i < 8; i++) {
+                    if (num & 1) {
+                        if (!bmp.empty() && bmp.back().first + bmp.back().second == pos)
+                            bmp.back().second++;
+                        else
+                            bmp.emplace_back(pos, 1);
+                    }
+
+                    pos++;
+                    num >>= 1;
+                }
+
+                sp = sp.subspan(1);
+            }
+
+            for (const auto& b : bmp) {
+                free_space.emplace_back(k.objectid + (b.first * sb.sectorsize),
+                                        b.second * sb.sectorsize);
+            }
+        }
 
         return true;
     });
