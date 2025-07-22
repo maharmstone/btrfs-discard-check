@@ -21,6 +21,18 @@ using json = nlohmann::json;
 
 static bool errors_found = false;
 
+static const uint64_t INCOMPAT_FLAGS = btrfs::FEATURE_INCOMPAT_MIXED_BACKREF |
+                                       btrfs::FEATURE_INCOMPAT_DEFAULT_SUBVOL |
+                                       btrfs::FEATURE_INCOMPAT_MIXED_GROUPS |
+                                       btrfs::FEATURE_INCOMPAT_COMPRESS_LZO |
+                                       btrfs::FEATURE_INCOMPAT_COMPRESS_ZSTD |
+                                       btrfs::FEATURE_INCOMPAT_BIG_METADATA |
+                                       btrfs::FEATURE_INCOMPAT_EXTENDED_IREF |
+                                       btrfs::FEATURE_INCOMPAT_SKINNY_METADATA |
+                                       btrfs::FEATURE_INCOMPAT_NO_HOLES |
+                                       btrfs::FEATURE_INCOMPAT_METADATA_UUID |
+                                       btrfs::FEATURE_INCOMPAT_SIMPLE_QUOTA;
+
 struct chunk : btrfs::chunk {
     btrfs::stripe next_stripes[MAX_STRIPES - 1];
 };
@@ -931,6 +943,9 @@ static void check_qcow(const char* filename) {
 
     if (!btrfs::check_superblock_csum(sb))
         throw runtime_error("superblock csum mismatch");
+
+    if (sb.incompat_flags & ~INCOMPAT_FLAGS)
+        throw formatted_error("unsupported incompat flags {:x}", sb.incompat_flags & ~INCOMPAT_FLAGS);
 
     auto chunks = load_chunks(q, sb);
 
