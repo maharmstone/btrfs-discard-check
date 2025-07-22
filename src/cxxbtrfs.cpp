@@ -108,6 +108,8 @@ constexpr uint64_t BLOCK_GROUP_TREE_OBJECTID = 0xb;
 constexpr uint64_t EXTENT_CSUM_OBJECTID = 0xfffffffffffffff6;
 constexpr uint64_t DATA_RELOC_TREE_OBJECTID = 0xfffffffffffffff7;
 
+constexpr uint64_t DEVICE_RANGE_RESERVED = 0x100000;
+
 using uuid = array<uint8_t, 16>;
 
 struct dev_item {

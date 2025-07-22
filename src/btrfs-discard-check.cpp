@@ -641,8 +641,21 @@ static map<uint64_t, vector<extent2>> check_dev_tree(const qcow& q,
                 if (m.btrfs_alloc == btrfs_alloc::superblock && !m.qcow_alloc)
                     cerr << format("superblock at {:x} not allocated", m.offset) << endl;
                 else if (m.btrfs_alloc == btrfs_alloc::unallocated && m.qcow_alloc) {
+                    if (m.offset + m.length <= btrfs::DEVICE_RANGE_RESERVED)
+                        continue;
+
+                    uint64_t offset, length;
+
+                    if (m.offset < btrfs::DEVICE_RANGE_RESERVED) {
+                        offset = btrfs::DEVICE_RANGE_RESERVED;
+                        length = m.offset + m.length - btrfs::DEVICE_RANGE_RESERVED;
+                    } else {
+                        offset = m.offset;
+                        length = m.length;
+                    }
+
                     cerr << format("qcow range {:x}, {:x} allocated but not part of any btrfs chunk",
-                                   m.offset, m.length) << endl;
+                                   offset, length) << endl;
                 }
             }
         }
@@ -913,8 +926,6 @@ static void check_qcow(const char* filename) {
 
     if (!btrfs::check_superblock_csum(sb))
         throw runtime_error("superblock csum mismatch");
-
-    // FIXME - treat initial bit of volume (2MB?) as allocated
 
     auto chunks = load_chunks(q, sb);
 
