@@ -763,7 +763,7 @@ static map<uint64_t, vector<space_entry2>> read_fst(const qcow& q,
 
     for (const auto& c : chunks) {
         if (!space.contains(c.first))
-            space[c.first].emplace_back(c.first, c.second.length);
+            space[c.first].emplace_back(c.first, c.second.length, true);
     }
 
     for (auto& bc : space) {
