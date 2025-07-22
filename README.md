@@ -69,5 +69,6 @@ To do
 
 * Multiple devices
 * RAID0, RAID10, RAID5, RAID6
+* Other hash algorithms (xxhash, SHA-256, Blake2)
 * Remove reliance on `qemu-img`
 * Understand the log tree
