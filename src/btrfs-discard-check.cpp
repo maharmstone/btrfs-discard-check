@@ -19,6 +19,8 @@ using json = nlohmann::json;
 
 #define MAX_STRIPES 2
 
+static bool errors_found = false;
+
 struct chunk : btrfs::chunk {
     btrfs::stripe next_stripes[MAX_STRIPES - 1];
 };
@@ -638,9 +640,10 @@ static map<uint64_t, vector<extent2>> check_dev_tree(const qcow& q,
     for (const auto& bc : by_chunk) {
         if (bc.first == 0) {
             for (const auto& m : bc.second) {
-                if (m.btrfs_alloc == btrfs_alloc::superblock && !m.qcow_alloc)
+                if (m.btrfs_alloc == btrfs_alloc::superblock && !m.qcow_alloc) {
                     cerr << format("superblock at {:x} not allocated", m.offset) << endl;
-                else if (m.btrfs_alloc == btrfs_alloc::unallocated && m.qcow_alloc) {
+                    errors_found = true;
+                } else if (m.btrfs_alloc == btrfs_alloc::unallocated && m.qcow_alloc) {
                     if (m.offset + m.length <= btrfs::DEVICE_RANGE_RESERVED)
                         continue;
 
@@ -656,6 +659,7 @@ static map<uint64_t, vector<extent2>> check_dev_tree(const qcow& q,
 
                     cerr << format("qcow range {:x}, {:x} allocated but not part of any btrfs chunk",
                                    offset, length) << endl;
+                    errors_found = true;
                 }
             }
         }
@@ -748,6 +752,7 @@ static map<uint64_t, vector<space_entry2>> read_fst(const qcow& q,
         if (it == chunks.begin()) {
             cerr << format("free space entry {:x}, {:x} not part of any chunk",
                            f.first, f.second) << endl;
+            errors_found = true;
             continue;
         }
 
@@ -890,9 +895,11 @@ static void do_merge2(uint64_t chunk_address, vector<extent2>& dev_extents,
         if (f.qcow_alloc && f.btrfs_alloc == btrfs_alloc::chunk_free) {
             cerr << format("qcow range {:x}, {:x} allocated (address {:x}) but is free space",
                            f.offset, f.length, f.address) << endl;
+            errors_found = true;
         } else if (!f.qcow_alloc && f.btrfs_alloc == btrfs_alloc::chunk_used) {
             cerr << format("qcow range {:x}, {:x} discarded (address {:x}) but is allocated",
                            f.offset, f.length, f.address) << endl;
+            errors_found = true;
         }
     }
 }
@@ -952,7 +959,5 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // FIXME - return 1 if any errors found
-
-    return 0;
+    return errors_found ? 1 : 0;
 }
