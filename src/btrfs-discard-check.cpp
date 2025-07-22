@@ -31,7 +31,8 @@ static const uint64_t INCOMPAT_FLAGS = btrfs::FEATURE_INCOMPAT_MIXED_BACKREF |
                                        btrfs::FEATURE_INCOMPAT_SKINNY_METADATA |
                                        btrfs::FEATURE_INCOMPAT_NO_HOLES |
                                        btrfs::FEATURE_INCOMPAT_METADATA_UUID |
-                                       btrfs::FEATURE_INCOMPAT_SIMPLE_QUOTA;
+                                       btrfs::FEATURE_INCOMPAT_SIMPLE_QUOTA |
+                                       btrfs::FEATURE_INCOMPAT_REMAP_TREE;
 
 struct chunk : btrfs::chunk {
     btrfs::stripe next_stripes[MAX_STRIPES - 1];
