@@ -75,6 +75,7 @@ constexpr uint64_t FEATURE_INCOMPAT_ZONED = 1 << 12;
 constexpr uint64_t FEATURE_INCOMPAT_EXTENT_TREE_V2 = 1 << 13;
 constexpr uint64_t FEATURE_INCOMPAT_RAID_STRIPE_TREE = 1 << 14;
 constexpr uint64_t FEATURE_INCOMPAT_SIMPLE_QUOTA = 1 << 16;
+constexpr uint64_t FEATURE_INCOMPAT_REMAP_TREE = 1 << 17;
 
 constexpr uint64_t FEATURE_COMPAT_RO_FREE_SPACE_TREE = 1 << 0;
 constexpr uint64_t FEATURE_COMPAT_RO_FREE_SPACE_TREE_VALID = 1 << 1;
@@ -92,6 +93,8 @@ constexpr uint64_t BLOCK_GROUP_RAID5 = 1 << 7;
 constexpr uint64_t BLOCK_GROUP_RAID6 = 1 << 8;
 constexpr uint64_t BLOCK_GROUP_RAID1C3 = 1 << 9;
 constexpr uint64_t BLOCK_GROUP_RAID1C4 = 1 << 10;
+constexpr uint64_t BLOCK_GROUP_REMAPPED = 1 << 11;
+constexpr uint64_t BLOCK_GROUP_REMAP = 1 << 12;
 
 constexpr uint64_t FIRST_CHUNK_TREE_OBJECTID = 0x100;
 
@@ -105,6 +108,8 @@ constexpr uint64_t CSUM_TREE_OBJECTID = 0x7;
 constexpr uint64_t UUID_TREE_OBJECTID = 0x9;
 constexpr uint64_t FREE_SPACE_TREE_OBJECTID = 0xa;
 constexpr uint64_t BLOCK_GROUP_TREE_OBJECTID = 0xb;
+constexpr uint64_t RAID_STRIPE_TREE_OBJECTID = 0xc;
+constexpr uint64_t REMAP_TREE_OBJECTID = 0xd;
 constexpr uint64_t EXTENT_CSUM_OBJECTID = 0xfffffffffffffff6;
 constexpr uint64_t DATA_RELOC_TREE_OBJECTID = 0xfffffffffffffff7;
 
@@ -196,7 +201,10 @@ struct super_block {
     uint64_t uuid_tree_generation;
     uuid metadata_uuid;
     uint64_t nr_global_roots;
-    uint64_t reserved[27];
+    uint64_t remap_root;
+    uint64_t remap_root_generation;
+    uint8_t remap_root_level;
+    uint8_t reserved[199];
     array<uint8_t, 0x800> sys_chunk_array;
     array<root_backup, 4> super_roots;
     uint8_t padding[565];
@@ -235,6 +243,9 @@ enum class key_type : uint8_t {
     DEV_ITEM = 0xd8,
     CHUNK_ITEM = 0xe4,
     RAID_STRIPE = 0xe6,
+    IDENTITY_REMAP = 0xea,
+    REMAP = 0xeb,
+    REMAP_BACKREF = 0xec,
     QGROUP_STATUS = 0xf0,
     QGROUP_INFO = 0xf2,
     QGROUP_LIMIT = 0xf4,
@@ -517,6 +528,12 @@ struct std::formatter<enum btrfs::key_type> {
                 return format_to(ctx.out(), "CHUNK_ITEM");
             case btrfs::key_type::RAID_STRIPE:
                 return format_to(ctx.out(), "RAID_STRIPE");
+            case btrfs::key_type::IDENTITY_REMAP:
+                return format_to(ctx.out(), "IDENTITY_REMAP");
+            case btrfs::key_type::REMAP:
+                return format_to(ctx.out(), "REMAP");
+            case btrfs::key_type::REMAP_BACKREF:
+                return format_to(ctx.out(), "REMAP_BACKREF");
             case btrfs::key_type::QGROUP_STATUS:
                 return format_to(ctx.out(), "QGROUP_STATUS");
             case btrfs::key_type::QGROUP_INFO:
