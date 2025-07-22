@@ -170,6 +170,7 @@ void qcow::read(uint64_t offset, span<uint8_t> buf) const {
                 if (buf.size() == to_copy)
                     return;
 
+                offset += to_copy;
                 buf = buf.subspan(to_copy);
 
                 break;
