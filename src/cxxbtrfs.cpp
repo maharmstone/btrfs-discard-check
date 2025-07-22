@@ -396,6 +396,10 @@ struct dev_extent {
     uuid chunk_tree_uuid;
 } __attribute__ ((__packed__));
 
+struct remap {
+    uint64_t address;
+} __attribute__ ((__packed__));
+
 enum class raid_type {
     SINGLE,
     RAID0,

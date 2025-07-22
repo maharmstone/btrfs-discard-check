@@ -201,8 +201,55 @@ concept walk_func = requires(T t) {
     { t(*(btrfs::key*)nullptr, span<const uint8_t>()) } -> same_as<bool>;
 };
 
-static uint64_t get_physical_address(uint64_t address, const map<uint64_t, chunk>& chunks) {
+static bool walk_tree(const qcow& q, const btrfs::super_block& sb, uint64_t address,
+                      uint8_t exp_level, uint64_t exp_generation,
+                      uint64_t exp_owner, const map<uint64_t, chunk>& chunks,
+                      walk_func auto func);
+
+static uint64_t resolve_remap(const qcow& q, const btrfs::super_block& sb,
+                              uint64_t address, const map<uint64_t, chunk>& chunks) {
+    uint64_t ret;
+
+    // FIXME - do something like btrfs_search_slot rather than walking
+
+    walk_tree(q, sb, sb.remap_root, sb.remap_root_level, sb.remap_root_generation,
+              btrfs::REMAP_TREE_OBJECTID, chunks,
+              [address, &ret](const btrfs::key& key, span<const uint8_t> sp) {
+        if (key.type != btrfs::key_type::REMAP && key.type != btrfs::key_type::IDENTITY_REMAP)
+            return true;
+
+        if (key.objectid > address)
+            throw formatted_error("could not resolve remap for address {:x}", address);
+
+        if (key.objectid <= address && key.objectid + key.offset > address) {
+            if (key.type == btrfs::key_type::IDENTITY_REMAP)
+                ret = address;
+            else {
+                if (sp.size() < sizeof(btrfs::remap)) {
+                    throw formatted_error("REMAP was {} bytes, expected {}",
+                                          sp.size(), sizeof(btrfs::remap));
+                }
+
+                const auto& r = *(btrfs::remap*)sp.data();
+
+                ret = address - key.objectid + r.address;
+            }
+
+            return false;
+        }
+
+        return true;
+    });
+
+    return ret;
+}
+
+static uint64_t get_physical_address(const qcow& q, const btrfs::super_block& sb,
+                                     uint64_t address, const map<uint64_t, chunk>& chunks) {
     auto& [chunk_start, c] = find_chunk(chunks, address);
+
+    if (c.type & btrfs::BLOCK_GROUP_REMAPPED)
+        return get_physical_address(q, sb, resolve_remap(q, sb, address, chunks), chunks);
 
     switch (btrfs::get_chunk_raid_type(c)) {
         case btrfs::raid_type::RAID0:
@@ -226,7 +273,7 @@ static bool walk_tree(const qcow& q, const btrfs::super_block& sb, uint64_t addr
 
     v.resize(sb.nodesize);
 
-    auto phys_address = get_physical_address(address, chunks);
+    auto phys_address = get_physical_address(q, sb, address, chunks);
 
     q.read(phys_address, v);
 
@@ -295,7 +342,7 @@ static bool find_item(const qcow& q, const btrfs::super_block& sb, uint64_t addr
 
     v.resize(sb.nodesize);
 
-    auto phys_address = get_physical_address(address, chunks);
+    auto phys_address = get_physical_address(q, sb, address, chunks);
 
     q.read(phys_address, v);
 
