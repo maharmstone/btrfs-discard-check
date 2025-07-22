@@ -685,8 +685,6 @@ static map<uint64_t, vector<space_entry2>> read_fst(const qcow& q,
 
     static const btrfs::key search_key = { btrfs::FREE_SPACE_TREE_OBJECTID, btrfs::key_type::ROOT_ITEM, 0 };
 
-    // FIXME - search tree rather than walking
-
     if (!find_item(q, sb, sb.root, sb.root_level, sb.generation, btrfs::ROOT_TREE_OBJECTID,
                    chunks, search_key, [&fst_root, &fst_level, &fst_generation](span<const uint8_t> sp) {
         if (sp.size() < sizeof(btrfs::root_item)) {
@@ -931,7 +929,10 @@ static void check_qcow(const char* filename) {
 
     auto dev_extents = check_dev_tree(q, chunks, sb);
 
-    // FIXME - die if FST flag not set (or just refuse to run FST code)
+    if (!(sb.compat_ro_flags & btrfs::FEATURE_COMPAT_RO_FREE_SPACE_TREE)) {
+        cerr << "not analysing free space as filesystem is not using free space tree" << endl;
+        return;
+    }
 
     auto space = read_fst(q, chunks, sb);
 
